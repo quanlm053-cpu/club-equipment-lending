@@ -1,0 +1,142 @@
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { isIP } from 'node:net';
+import { sessionSeconds } from './database.js';
+import { hashPassword, verifyPassword } from './password.js';
+
+const cookieName = '__Host-lending_session';
+const cookieAttributes = 'Path=/; HttpOnly; Secure; SameSite=Lax';
+const safeMethods = new Set(['GET', 'HEAD', 'OPTIONS']);
+const sessionHash = (token) => createHash('sha256').update(token).digest();
+const csrfToken = (token) => createHmac('sha256', token).update('lending csrf v1').digest('base64url');
+
+function json(res, status, body) {
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(body));
+}
+
+function error(res, status, code) {
+  json(res, status, { code });
+}
+
+function sessionToken(req) {
+  const cookies = (req.headers.cookie ?? '').split(';').map((cookie) => cookie.trim());
+  const matches = cookies.filter((cookie) => cookie.startsWith(cookieName + '='));
+  if (matches.length !== 1) return;
+  const token = matches[0].slice(cookieName.length + 1);
+  if (/^[A-Za-z0-9_-]{43}$/.test(token)) return token;
+}
+
+function hasValidCsrf(req, expected) {
+  const value = req.headers['x-csrf-token'];
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value) &&
+    timingSafeEqual(Buffer.from(value), Buffer.from(expected));
+}
+
+async function credentials(req) {
+  if (req.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/json') return;
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req.iterator({ destroyOnReturn: false })) {
+    size += chunk.length;
+    if (size > 8192) return;
+    chunks.push(chunk);
+  }
+  let input;
+  try {
+    input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch {
+    return;
+  }
+  if (typeof input?.username !== 'string' || !input.username.trim() || input.username.length > 128 ||
+      typeof input.password !== 'string' || !input.password || Buffer.byteLength(input.password) > 1024) return;
+  return { username: input.username.trim().toLowerCase(), password: input.password };
+}
+
+function loginLimiter(now) {
+  const windowMs = 60_000;
+  let endsAt = 0;
+  const counts = new Map();
+  return (address) => {
+    const time = now();
+    if (time >= endsAt) {
+      endsAt = time + windowMs;
+      counts.clear();
+    }
+    const count = counts.get(address) ?? 0;
+    if (count >= 10 || (count === 0 && counts.size >= 10_000)) return Math.ceil((endsAt - time) / 1000);
+    counts.set(address, count + 1);
+    return 0;
+  };
+}
+
+function identity(user, csrf) {
+  return { id: user.id, username: user.username, role: user.role, csrf_token: csrf };
+}
+
+export async function createApp({ store, origin, trustedProxyIp, routes = new Map(), now = Date.now, logger = console }) {
+  const dummyHash = await hashPassword(randomBytes(32).toString('base64url'));
+  const retryAfter = loginLimiter(now);
+  const protectedRoutes = new Map(routes);
+  protectedRoutes.set('GET /auth/me', {
+    handle: (_req, res, session) => json(res, 200, session.user),
+  });
+  protectedRoutes.set('POST /auth/logout', {
+    async handle(_req, res, session) {
+      await store.deleteSession(session.hash);
+      res.setHeader('Set-Cookie', cookieName + '=; Max-Age=0; ' + cookieAttributes);
+      res.writeHead(204).end();
+    },
+  });
+  protectedRoutes.set('GET /equipment', {
+    handle: async (_req, res) => json(res, 200, await store.listEquipment()),
+  });
+
+  async function login(req, res) {
+    if (req.headers.origin !== origin) return error(res, 403, 'ORIGIN_FORBIDDEN');
+    const peer = req.socket.remoteAddress;
+    const forwarded = req.headers['x-lending-client-ip'];
+    const address = peer === trustedProxyIp && typeof forwarded === 'string' && isIP(forwarded)
+      ? forwarded
+      : peer;
+    const seconds = retryAfter(address);
+    if (seconds) {
+      res.setHeader('Retry-After', seconds);
+      return error(res, 429, 'LOGIN_RATE_LIMITED');
+    }
+    const input = await credentials(req);
+    if (!input) return error(res, 400, 'INVALID_INPUT');
+    const user = await store.userByUsername(input.username);
+    const valid = await verifyPassword(input.password, user?.password_hash ?? dummyHash);
+    if (!user || !valid) return error(res, 401, 'INVALID_CREDENTIALS');
+
+    const token = randomBytes(32).toString('base64url');
+    await store.createSession(sessionHash(token), user.id);
+    res.setHeader('Set-Cookie', cookieName + '=' + token + '; Max-Age=' + sessionSeconds + '; ' + cookieAttributes);
+    json(res, 200, identity(user, csrfToken(token)));
+  }
+
+  return async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const { pathname } = new URL(req.url, origin);
+      const key = req.method + ' ' + pathname;
+      if (key === 'POST /auth/login') return await login(req, res);
+
+      const route = protectedRoutes.get(key);
+      if (!route) return error(res, 404, 'NOT_FOUND');
+
+      const token = sessionToken(req);
+      const hash = token && sessionHash(token);
+      const user = hash && await store.userBySession(hash);
+      if (!user) return error(res, 401, 'AUTH_REQUIRED');
+      if (route.role && user.role !== route.role) return error(res, 403, 'FORBIDDEN');
+      const csrf = csrfToken(token);
+      if (!safeMethods.has(req.method) && !hasValidCsrf(req, csrf)) return error(res, 403, 'CSRF_INVALID');
+      await route.handle(req, res, { user: identity(user, csrf), hash });
+    } catch (cause) {
+      logger.error('Lending API request failed', cause.code ?? cause.name);
+      if (res.headersSent) return res.destroy();
+      error(res, 500, 'INTERNAL_ERROR');
+    }
+  };
+}

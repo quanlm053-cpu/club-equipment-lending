@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mượn thiết bị CLB</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header><div class="bar">
+    <strong>Mượn thiết bị CLB</strong>
+    <nav aria-label="Điều hướng chính">
+      <span id="role"></span>
+      <a href="#equipment" id="equipment-link" hidden>Danh mục</a>
+      <a href="#management" id="management-link" hidden>Quản lý</a>
+      <button type="button" id="logout" hidden>Đăng xuất</button>
+    </nav>
+  </div></header>
+  <div class="layout">
+    <main class="panel">
+      <noscript>Vui lòng bật JavaScript để sử dụng ứng dụng.</noscript>
+      <section id="session" aria-labelledby="session-title">
+        <h1 id="session-title" tabindex="-1">Phiên đăng nhập</h1>
+        <p id="session-status" role="status">Đang kiểm tra phiên…</p>
+        <button type="button" id="session-retry" hidden>Thử lại</button>
+      </section>
+      <section id="login" aria-labelledby="login-title" hidden>
+        <h1 id="login-title" tabindex="-1">Đăng nhập</h1>
+        <form id="login-form" method="post">
+          <label for="username">Tên đăng nhập</label>
+          <input id="username" autocomplete="username" maxlength="128" required>
+          <label for="password">Mật khẩu</label>
+          <input id="password" type="password" autocomplete="current-password" required>
+          <p id="login-status" role="status"></p>
+          <button class="primary" id="submit" type="submit">Đăng nhập</button>
+        </form>
+        <h2 class="demo-heading">Tài khoản mẫu</h2>
+        <div class="actions">
+          <button type="button" data-demo="demo.member">Điền tên thành viên</button>
+          <button type="button" data-demo="demo.manager">Điền tên quản lý</button>
+        </div>
+      </section>
+      <section id="equipment" aria-labelledby="equipment-title" hidden>
+        <h1 id="equipment-title" tabindex="-1">Danh mục thiết bị</h1>
+        <p id="catalog-status" role="status"></p>
+        <button type="button" id="retry" hidden>Thử lại</button>
+        <ul id="assets" class="assets" role="list" hidden></ul>
+      </section>
+      <section id="management" aria-labelledby="management-title" hidden>
+        <h1 id="management-title" tabindex="-1">Quản lý</h1>
+        <p id="management-status"></p>
+        <a href="#equipment">Về danh mục</a>
+      </section>
+      <p id="action-status" role="status"></p>
+    </main>
+  </div>
+</body>
+</html>
