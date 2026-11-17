@@ -2,6 +2,11 @@ import { readFile } from 'node:fs/promises';
 import { hashPassword } from './password.js';
 
 export const sessionSeconds = 8 * 60 * 60;
+const decisionErrors = new Map([
+  [51040, 'NOT_FOUND'],
+  [51041, 'INVALID_TRANSITION'],
+  [51042, 'SCHEDULE_CONFLICT'],
+]);
 
 export async function connectDatabase(env = process.env) {
   if (!env.DATABASE_URL) throw new Error('Set DATABASE_URL for SQL Server');
@@ -18,13 +23,20 @@ export async function connectDatabase(env = process.env) {
 
 function tables(schema = 'dbo') {
   if (!/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/.test(schema)) throw new Error('Invalid SQL Server schema');
-  return Object.fromEntries(['users', 'sessions', 'equipment', 'loan_requests'].map(name => [name, `[${schema}].[${name}]`]));
+  return Object.fromEntries(['users', 'sessions', 'equipment', 'loan_requests', 'loan_events']
+    .map(name => [name, `[${schema}].[${name}]`]));
 }
 
 export function sqlServerStore(pool, sql, schema) {
-  const { users, sessions, equipment, loan_requests } = tables(schema);
+  const { users, sessions, equipment, loan_requests, loan_events } = tables(schema);
   const loanFields = ['id', 'equipment_id', 'start_at', 'end_at', 'created_at', 'status'];
   const loanColumns = loanFields.join(', ');
+  const managedLoans = `SELECT ${loanFields.map(field => 'r.' + field).join(', ')}, r.borrower_id,
+                               e.asset_code AS equipment_asset_code, e.name AS equipment_name,
+                               u.username AS borrower_username
+                        FROM ${loan_requests} AS r
+                        JOIN ${equipment} AS e ON e.id = r.equipment_id
+                        JOIN ${users} AS u ON u.id = r.borrower_id`;
   return {
     async userByUsername(username) {
       const result = await pool.request().input('username', sql.NVarChar(255), username)
@@ -78,6 +90,79 @@ export function sqlServerStore(pool, sql, schema) {
                 WHERE id = @request_id AND borrower_id = @borrower_id`);
       return result.recordset[0];
     },
+    async listPendingLoanRequests() {
+      const result = await pool.request().query(`${managedLoans}
+        WHERE r.status = 'PENDING' ORDER BY r.created_at, r.id`);
+      return result.recordset;
+    },
+    async readManagedLoanRequest(requestId) {
+      const result = await pool.request().input('request_id', sql.Int, requestId)
+        .query(`${managedLoans} WHERE r.id = @request_id`);
+      return result.recordset[0];
+    },
+    async decideLoanRequest(requestId, actorId, target) {
+      try {
+        const result = await pool.request().input('request_id', sql.Int, requestId)
+          .input('actor_id', sql.Int, actorId).input('target', sql.VarChar(16), target)
+          .query(`
+            SET XACT_ABORT ON;
+            SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
+            BEGIN TRY
+              BEGIN TRANSACTION;
+              DECLARE @equipment_id int, @locked_equipment_id int;
+              DECLARE @status varchar(16), @start_at datetime2(3), @end_at datetime2(3);
+              DECLARE @updated TABLE (
+                id int, equipment_id int, start_at datetime2(3), end_at datetime2(3),
+                created_at datetime2(3), status varchar(16), borrower_id int
+              );
+
+              -- Resolve the immutable equipment ID before taking update locks.
+              SELECT @equipment_id = equipment_id FROM ${loan_requests} WHERE id = @request_id;
+              IF @equipment_id IS NULL THROW 51040, 'NOT_FOUND', 1;
+
+              SELECT @locked_equipment_id = id FROM ${equipment} WITH (UPDLOCK, HOLDLOCK)
+              WHERE id = @equipment_id;
+              IF @locked_equipment_id IS NULL THROW 51050, 'INTEGRITY_ERROR', 1;
+
+              SELECT @status = status, @start_at = start_at, @end_at = end_at
+              FROM ${loan_requests} WITH (UPDLOCK)
+              WHERE id = @request_id AND equipment_id = @locked_equipment_id;
+              IF @status IS NULL THROW 51040, 'NOT_FOUND', 1;
+              IF @status <> 'PENDING' THROW 51041, 'INVALID_TRANSITION', 1;
+
+              IF @target = 'APPROVED' AND EXISTS (
+                SELECT 1 FROM ${loan_requests}
+                WHERE equipment_id = @locked_equipment_id
+                  AND status IN ('APPROVED', 'HANDED_OVER')
+                  AND start_at < @end_at AND end_at > @start_at
+              ) THROW 51042, 'SCHEDULE_CONFLICT', 1;
+
+              UPDATE ${loan_requests}
+              SET status = @target
+              OUTPUT ${[...loanFields, 'borrower_id'].map(field => 'inserted.' + field).join(', ')}
+                INTO @updated (${loanColumns}, borrower_id)
+              WHERE id = @request_id AND status = 'PENDING';
+              IF @@ROWCOUNT <> 1 THROW 51041, 'INVALID_TRANSITION', 1;
+
+              INSERT INTO ${loan_events} (request_id, actor_id, from_status, to_status)
+              VALUES (@request_id, @actor_id, @status, @target);
+
+              COMMIT TRANSACTION;
+              SELECT ${loanColumns}, borrower_id FROM @updated;
+            END TRY
+            BEGIN CATCH
+              IF XACT_STATE() <> 0 ROLLBACK TRANSACTION;
+              THROW;
+            END CATCH;
+          `);
+        return { loan: result.recordset[0] };
+      } catch (error) {
+        const code = decisionErrors.get(Number(error.number));
+        if (code) return { code };
+        throw error;
+      }
+    },
     async readAvailability(equipmentId, from, to) {
       const result = await pool.request().input('equipment_id', sql.Int, equipmentId)
         .input('from_utc', sql.DateTime2(3), from).input('to_utc', sql.DateTime2(3), to)
@@ -115,7 +200,9 @@ async function transaction(pool, sql, schema, work) {
 
 export async function migrate(pool, sql, schema = 'dbo') {
   tables(schema);
-  const migrations = ['001-foundation.sql', '002-loan-requests.sql', '003-loan-request-borrower-index.sql'];
+  const migrations = [
+    '001-foundation.sql', '002-loan-requests.sql', '003-loan-request-borrower-index.sql', '004-loan-events.sql',
+  ];
   const scripts = await Promise.all(migrations.map(file =>
     readFile(new URL('./migrations/' + file, import.meta.url), 'utf8')));
   await transaction(pool, sql, schema, async tx => {

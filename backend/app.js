@@ -57,6 +57,8 @@ async function credentials(req) {
 }
 
 const validId = (id) => Number.isInteger(id) && id > 0 && id <= 2147483647;
+const loanRequestId = (id) => /^\d+$/.test(id) && validId(Number(id)) ? Number(id) : undefined;
+const loanRoles = new Set(['MEMBER', 'MANAGER']);
 
 function loanInput(input) {
   if (!input || typeof input !== 'object' || Object.keys(input).length !== 3 ||
@@ -116,21 +118,39 @@ export async function createApp({ store, origin, trustedProxyIp, routes = new Ma
     },
   });
   protectedRoutes.set('GET /loan-requests', {
-    role: 'MEMBER',
-    handle: async (_req, res, session) => json(res, 200, await store.listLoanRequests(session.user.id)),
+    roles: loanRoles,
+    async handle(_req, res, { user }) {
+      const loans = user.role === 'MANAGER'
+        ? await store.listPendingLoanRequests()
+        : await store.listLoanRequests(user.id);
+      json(res, 200, loans);
+    },
   });
   const loanDetailRoute = {
-    role: 'MEMBER',
-    async handle(_req, res, session, { id }) {
-      const requestId = Number(id);
-      if (!/^\d+$/.test(id) || !validId(requestId)) return error(res, 400, 'INVALID_INPUT');
-      const loan = await store.readLoanRequest(session.user.id, requestId);
+    roles: loanRoles,
+    async handle(_req, res, { user }, { id }) {
+      const requestId = loanRequestId(id);
+      if (!requestId) return error(res, 400, 'INVALID_INPUT');
+      const loan = user.role === 'MANAGER'
+        ? await store.readManagedLoanRequest(requestId)
+        : await store.readLoanRequest(user.id, requestId);
       if (!loan) return error(res, 404, 'NOT_FOUND');
       json(res, 200, loan);
     },
   };
+  const loanDecisionRoute = {
+    role: 'MANAGER',
+    async handle(_req, res, { user }, { id, action }) {
+      const requestId = loanRequestId(id);
+      if (!requestId) return error(res, 400, 'INVALID_INPUT');
+      const target = action === 'approve' ? 'APPROVED' : 'REJECTED';
+      const { loan, code } = await store.decideLoanRequest(requestId, user.id, target);
+      if (code) return error(res, code === 'NOT_FOUND' ? 404 : 409, code);
+      json(res, 200, loan);
+    },
+  };
   const availabilityRoute = {
-    roles: new Set(['MEMBER', 'MANAGER']),
+    roles: loanRoles,
     async handle(_req, res, _session, { id, query }) {
       const input = availabilityInput(id, query);
       if (!input) return error(res, 400, 'INVALID_INPUT');
@@ -180,7 +200,9 @@ export async function createApp({ store, origin, trustedProxyIp, routes = new Ma
 
       const availability = /^GET \/equipment\/([^/]+)\/availability$/.exec(key);
       const loanDetail = /^GET \/loan-requests\/([^/]+)$/.exec(key);
-      const route = availability ? availabilityRoute : loanDetail ? loanDetailRoute : protectedRoutes.get(key);
+      const decision = /^POST \/loan-requests\/([^/]+)\/(approve|reject)$/.exec(key);
+      const route = availability ? availabilityRoute : loanDetail ? loanDetailRoute
+        : decision ? loanDecisionRoute : protectedRoutes.get(key);
       if (!route) return error(res, 404, 'NOT_FOUND');
 
       const token = sessionToken(req);
@@ -192,8 +214,8 @@ export async function createApp({ store, origin, trustedProxyIp, routes = new Ma
       const csrf = csrfToken(token);
       if (!safeMethods.has(req.method) && !hasValidCsrf(req, csrf)) return error(res, 403, 'CSRF_INVALID');
       const session = { user: identity(user, csrf), hash };
-      const match = availability ?? loanDetail;
-      await route.handle(req, res, session, { id: match?.[1], query: searchParams });
+      const match = availability ?? loanDetail ?? decision;
+      await route.handle(req, res, session, { id: match?.[1], action: decision?.[2], query: searchParams });
     } catch (cause) {
       logger.error('Lending API request failed', cause.code ?? cause.name);
       if (res.headersSent) return res.destroy();

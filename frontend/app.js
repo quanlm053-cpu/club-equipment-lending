@@ -19,6 +19,7 @@ let user = null;
 let catalogRequest;
 let availabilityRequest;
 let checkingSession = false;
+let sessionVerification;
 let loggingOut = false;
 let loanView;
 let loanLoginRoute;
@@ -47,6 +48,10 @@ function message(id, text, error = false) {
 
 function show(screen) {
   loanView?.abort();
+  managementView?.read?.abort();
+  managementView = undefined;
+  decisionDialog.close();
+  byId('management-rows').replaceChildren();
   byId('request-rows').replaceChildren();
   byId('request-data').hidden = true;
   for (const id of ['detail-device', 'detail-created', 'detail-start', 'detail-end', 'request-badge']) {
@@ -59,7 +64,7 @@ function show(screen) {
   byId('lookup').reset();
   device.replaceChildren();
   byId('lookup-fields').disabled = true;
-  byId('app-panel').classList.toggle('panel-wide', screen === 'availability');
+  byId('app-panel').classList.toggle('panel-wide', ['availability', 'management'].includes(screen));
   byId('assets').replaceChildren();
   byId('assets').hidden = true;
   for (const id of screens) byId(id).hidden = id !== screen;
@@ -80,6 +85,7 @@ function show(screen) {
 
 function endSession(text = '') {
   user = null;
+  managementDecisions.clear();
   history.replaceState(null, '', '#login');
   byId('password').value = '';
   message('action-status', '');
@@ -447,6 +453,296 @@ async function submitLoan(event) {
   }
 }
 
+let managementView;
+const managementDecisions = new Map();
+const decisionDialog = byId('decision-dialog');
+let decisionSelection;
+
+function isManagementRoute(hash) {
+  return hash === '#management' || hash.startsWith('#management/');
+}
+
+function showManagement() {
+  show('management');
+  const manager = user.role === 'MANAGER';
+  const detail = location.hash !== '#management';
+  const id = Number(/^#management\/(\d+)$/.exec(location.hash)?.[1]);
+  byId('management-zone').hidden = !manager;
+  byId('management-back').hidden = !manager || !detail;
+  byId('management-list-title').hidden = !manager || detail;
+  byId('management-refresh').hidden = true;
+  byId('management-title').textContent = detail ? 'Chi tiết yêu cầu' : 'Duyệt yêu cầu mượn';
+  byId('management-recovery').replaceChildren();
+  message('management-feedback', '');
+  if (!manager) return message('management-status', 'Bạn không có quyền truy cập.', true);
+  if (detail && !(id > 0 && id <= 2147483647)) {
+    return message('management-status', 'Đường dẫn yêu cầu không hợp lệ.', true);
+  }
+  managementView = { id: detail ? id : null, items: [] };
+  byId('management-refresh').hidden = false;
+  void loadManagement(managementView);
+}
+
+function managementReadError(error) {
+  if (error.status === 403) return 'Bạn không có quyền truy cập.';
+  if (error.status === 404) return 'Không tìm thấy yêu cầu. Hãy về hàng đợi và làm mới.';
+  if (error.status === 400) return 'Đường dẫn yêu cầu không hợp lệ.';
+  return 'Chưa tải được dữ liệu. Hãy thử lại.';
+}
+
+async function loadManagement(view, clear = true) {
+  view.read?.abort();
+  const read = new AbortController();
+  view.read = read;
+  const refresh = byId('management-refresh');
+  refresh.disabled = true;
+  refresh.textContent = 'Làm mới';
+  if (clear) view.items = [];
+  renderManagement(view);
+  message('management-status', view.id ? 'Đang tải chi tiết…' : 'Đang tải hàng đợi…');
+  try {
+    const result = await api('/loan-requests' + (view.id ? '/' + view.id : ''), {
+      signal: AbortSignal.any([read.signal, AbortSignal.timeout(15000)]),
+    });
+    if (read.signal.aborted) return;
+    view.items = view.id ? [result] : result;
+    renderManagement(view);
+    message('management-status', view.items.length ? '' : 'Chưa có yêu cầu đang chờ.');
+  } catch (error) {
+    if (read.signal.aborted) return;
+    if (error.status === 401) return expired();
+    view.items = [];
+    renderManagement(view);
+    message('management-status', managementReadError(error), true);
+    refresh.textContent = 'Thử lại';
+  } finally {
+    if (!read.signal.aborted) refresh.disabled = false;
+  }
+}
+
+function decisionButton(label, key, action) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = label;
+  button.dataset.focusKey = key;
+  button.addEventListener('click', action);
+  return button;
+}
+
+function managementSummary(item) {
+  return formatClubTime(item.start_at) + ' → ' + formatClubTime(item.end_at);
+}
+
+function renderManagement(view) {
+  if (!view || view !== managementView) return;
+  const rows = byId('management-rows');
+  const recovery = byId('management-recovery');
+  const focused = document.activeElement;
+  const focusKey = rows.contains(focused) || recovery.contains(focused) ? focused.dataset.focusKey : null;
+  const items = view.items;
+  byId('management-list-title').textContent = 'Đang chờ (' + items.length + ')';
+  if (view.id && items.length) byId('management-title').textContent = 'Yêu cầu #' + view.id;
+  rows.replaceChildren(...items.map((item) => {
+    const row = document.createElement('li');
+    row.className = 'asset management-card';
+    const info = document.createElement('div');
+    const title = document.createElement('h3');
+    title.textContent = item.equipment_name + ' · ' + item.equipment_asset_code;
+    info.append(title);
+    for (const text of [
+      managementSummary(item),
+      'YC-' + item.id + ' · Người gửi ' + item.borrower_username,
+      'Gửi lúc ' + formatClubTime(item.created_at),
+    ]) {
+      const line = document.createElement('p');
+      line.textContent = text;
+      info.append(line);
+    }
+    const badge = document.createElement('span');
+    badge.className = 'request-badge';
+    badge.textContent = loanLabels[item.status] || item.status;
+    info.append(badge);
+    const actions = document.createElement('div');
+    actions.className = 'management-actions';
+    const decision = managementDecisions.get(item.id);
+    if (!view.id) {
+      const link = document.createElement('a');
+      link.href = '#management/' + item.id;
+      link.dataset.focusKey = item.id + '-detail';
+      link.textContent = 'Chi tiết';
+      actions.append(link);
+    }
+    if (item.status === 'PENDING') {
+      for (const [verb, label, style] of [['approve', 'Duyệt', 'primary'], ['reject', 'Từ chối', 'reject']]) {
+        const button = decisionButton(label, item.id + '-' + verb, () => confirmDecision(item, verb, label));
+        button.className = style;
+        button.disabled = Boolean(decision?.locked || managementBusy());
+        actions.append(button);
+      }
+    }
+    row.append(info, actions);
+    if (decision?.notice) {
+      const notice = document.createElement('p');
+      notice.className = 'management-warning';
+      notice.textContent = decision.notice;
+      row.append(notice);
+    }
+    return row;
+  }));
+  recovery.replaceChildren();
+  for (const [id, decision] of managementDecisions) {
+    if (!decision.retry || (view.id && view.id !== id)) continue;
+    const retry = decisionButton(decision.retryLabel + ' YC-' + id, id + '-retry', decision.retry);
+    retry.disabled = managementBusy();
+    recovery.append(retry);
+  }
+  if (focusKey) {
+    const next = [...byId('management').querySelectorAll('[data-focus-key]')]
+      .find((node) => node.dataset.focusKey === focusKey && !node.disabled);
+    (next || byId('management-title')).focus();
+  }
+}
+
+function confirmDecision(item, verb, label) {
+  if (loggingOut || managementBusy() || managementDecisions.get(item.id)?.locked) return;
+  decisionSelection = { item, verb, user, view: managementView };
+  decisionDialog.returnValue = '';
+  byId('decision-title').textContent = label + ' yêu cầu YC-' + item.id + '?';
+  byId('decision-confirm').textContent = 'Xác nhận ' + label.toLowerCase();
+  byId('decision-summary').textContent = item.equipment_name + ' · ' + item.equipment_asset_code
+    + ' · ' + managementSummary(item);
+  decisionDialog.showModal();
+}
+
+decisionDialog.addEventListener('close', () => {
+  const selection = decisionSelection;
+  decisionSelection = undefined;
+  if (decisionDialog.returnValue === 'confirm' && selection && selection.view === managementView
+    && selection.user === user && !loggingOut) void submitDecision(selection);
+});
+
+byId('management-refresh').addEventListener('click', () => {
+  byId('management-title').focus();
+  void loadManagement(managementView);
+});
+
+async function submitDecision({ item, verb, user: session }) {
+  const id = item.id;
+  if (managementBusy() || managementDecisions.get(id)?.locked) return;
+  const path = '/loan-requests/' + id;
+  const decision = { locked: true, sending: true, notice: 'Đang gửi quyết định…' };
+  managementDecisions.set(id, decision);
+  const feedback = (text, error = false) => {
+    if (managementView) message('management-feedback', 'YC-' + id + ' · ' + text, error);
+  };
+  const refreshView = () => {
+    if (managementView) void loadManagement(managementView, false);
+  };
+  const reconcile = async (refreshSession = false) => {
+    if (user !== session || managementBusy()) return;
+    decision.running = true;
+    decision.retry = undefined;
+    renderManagement(managementView);
+    try {
+      if (refreshSession) {
+        const current = await api('/auth/me', { signal: AbortSignal.timeout(15000) });
+        if (sessionVerification) await sessionVerification.promise;
+        if (user !== session) return;
+        if (current.id !== session.id || current.role !== session.role) return expired();
+        session.csrf_token = current.csrf_token;
+      }
+      let fresh = await api(path, { signal: AbortSignal.timeout(15000) });
+      if (sessionVerification) await sessionVerification.promise;
+      if (user !== session) return;
+      const queue = await api('/loan-requests', { signal: AbortSignal.timeout(15000) });
+      if (sessionVerification) await sessionVerification.promise;
+      if (user !== session) return;
+      const pendingInQueue = queue.some((entry) => entry.id === id);
+      if (fresh.status === 'PENDING' && !pendingInQueue) {
+        fresh = await api(path, { signal: AbortSignal.timeout(15000) });
+        if (sessionVerification) await sessionVerification.promise;
+        if (user !== session) return;
+      }
+      decision.locked = false;
+      if (fresh.status !== 'PENDING' || !pendingInQueue) {
+        managementDecisions.delete(id);
+      }
+      feedback(decision.notice + ' Trạng thái đã đọc: ' + (loanLabels[fresh.status] || fresh.status) + '.');
+      const view = managementView;
+      if (view && (!view.id || view.id === id)) {
+        view.read?.abort();
+        byId('management-refresh').disabled = false;
+        byId('management-refresh').textContent = 'Làm mới';
+        view.items = view.id ? [fresh] : queue.filter((entry) => entry.id !== id || fresh.status === 'PENDING');
+        message('management-status', view.items.length ? '' : 'Chưa có yêu cầu đang chờ.');
+      }
+    } catch (error) {
+      if (sessionVerification) await sessionVerification.promise;
+      if (user !== session) return;
+      if (error.status === 401) return expired();
+      decision.retryLabel = refreshSession ? 'Làm mới phiên và tải lại' : 'Tải lại trạng thái';
+      decision.retry = () => void reconcile(refreshSession);
+      feedback(decision.notice + ' ' + managementReadError(error), true);
+    } finally {
+      decision.running = false;
+      if (user === session) renderManagement(managementView);
+    }
+  };
+  renderManagement(managementView);
+  try {
+    const saved = await api(path + '/' + verb, {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': session.csrf_token },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (sessionVerification) await sessionVerification.promise;
+    if (user !== session) return;
+    managementDecisions.delete(id);
+    feedback((loanLabels[saved.status] || saved.status) + '.');
+    if (managementView) {
+      const view = managementView;
+      view.items = view.id
+        ? view.items.map((entry) => entry.id === id ? { ...entry, status: saved.status } : entry)
+        : view.items.filter((entry) => entry.id !== id);
+    }
+    refreshView();
+  } catch (error) {
+    if (sessionVerification) await sessionVerification.promise;
+    if (user !== session) return;
+    decision.sending = false;
+    if (error.status === 401) return expired();
+    switch (error.message) {
+      case 'SCHEDULE_CONFLICT':
+        decision.notice = 'Thiết bị đã có lịch trùng với khung giờ này.';
+        break;
+      case 'INVALID_TRANSITION':
+        decision.notice = 'Yêu cầu đã đổi trạng thái.';
+        break;
+      case 'CSRF_INVALID':
+        decision.notice = 'Phiên thao tác cần làm mới.';
+        break;
+      case 'FORBIDDEN':
+        decision.notice = 'Bạn không có quyền thực hiện thao tác này.';
+        break;
+      case 'ORIGIN_FORBIDDEN':
+      case 'INVALID_INPUT':
+      case 'NOT_FOUND':
+        managementDecisions.delete(id);
+        feedback(error.message === 'ORIGIN_FORBIDDEN' ? 'Địa chỉ ứng dụng không được phép thao tác.'
+          : managementReadError(error), true);
+        return refreshView();
+      default:
+        decision.notice = 'Chưa xác định được kết quả. Đang đối chiếu trạng thái yêu cầu.';
+    }
+    feedback(decision.notice, true);
+    await reconcile(['CSRF_INVALID', 'FORBIDDEN'].includes(error.message));
+  }
+}
+
+function managementBusy() {
+  return [...managementDecisions.values()].some((entry) => entry.sending || entry.running);
+}
+
 function isLoanRoute(hash) {
   return hash === '#requests' || hash.startsWith('#request/');
 }
@@ -463,11 +759,8 @@ function showBusinessScreen() {
     void loadCatalog(availabilityRoute[1]);
     return;
   }
-  if (location.hash === '#management') {
-    show('management');
-    message('management-status', user.role === 'MANAGER'
-      ? 'Hàng đợi yêu cầu sẽ có trong Story #114.'
-      : 'Bạn không có quyền truy cập.', user.role !== 'MANAGER');
+  if (isManagementRoute(location.hash)) {
+    showManagement();
     return;
   }
   history.replaceState(null, '', '#equipment');
@@ -478,19 +771,31 @@ function showBusinessScreen() {
 async function checkSession() {
   if (checkingSession || loggingOut) return;
   checkingSession = true;
-  const hadSession = Boolean(user);
+  // Keep decision responses waiting across a failed check and its retry.
+  sessionVerification ??= { ...Promise.withResolvers(), previous: user };
+  const { previous, resolve } = sessionVerification;
+  let verified = false;
   user = null;
   show('session');
   byId('session-retry').hidden = true;
   message('session-status', 'Đang kiểm tra phiên…');
   try {
-    user = await api('/auth/me');
+    const current = await api('/auth/me', { signal: AbortSignal.timeout(15000) });
+    verified = true;
+    if (previous && current.id === previous.id && current.role === previous.role
+      && current.csrf_token === previous.csrf_token) {
+      user = previous;
+    } else {
+      managementDecisions.clear();
+      user = current;
+    }
     showBusinessScreen();
   } catch (error) {
     if (error.status === 401) {
-      if (hadSession) expired();
+      verified = true;
+      if (previous) expired();
       else {
-        if (isLoanRoute(location.hash)) loanLoginRoute = location.hash;
+        if (isLoanRoute(location.hash) || isManagementRoute(location.hash)) loanLoginRoute = location.hash;
         endSession((loanLoginRoute || ['#equipment', '#management'].includes(location.hash) || location.hash.startsWith('#availability/'))
           ? 'Vui lòng đăng nhập để tiếp tục.' : '');
       }
@@ -500,6 +805,10 @@ async function checkSession() {
     }
   } finally {
     checkingSession = false;
+    if (verified) {
+      sessionVerification = undefined;
+      resolve();
+    }
   }
 }
 
@@ -571,6 +880,7 @@ async function logout() {
       try {
         const refreshed = await api('/auth/me');
         if (user !== session) return;
+        managementDecisions.clear();
         user = refreshed;
       } catch (refreshError) {
         if (refreshError.status === 401) return expired();
@@ -621,7 +931,7 @@ window.addEventListener('hashchange', () => {
   if (checkingSession) return;
   if (user) showBusinessScreen();
   else if (!byId('login').hidden && !byId('submit').disabled) {
-    if (isLoanRoute(location.hash)) loanLoginRoute = location.hash;
+    if (isLoanRoute(location.hash) || isManagementRoute(location.hash)) loanLoginRoute = location.hash;
     endSession('Vui lòng đăng nhập để tiếp tục.');
   }
 });

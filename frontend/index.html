@@ -144,12 +144,29 @@
         <p><a href="#requests">Về danh sách yêu cầu</a></p>
       </section>
       <section id="management" aria-labelledby="management-title" hidden>
-        <h1 id="management-title" tabindex="-1">Quản lý</h1>
-        <p id="management-status"></p>
-        <a href="#equipment">Về danh mục</a>
+        <h1 id="management-title" tabindex="-1">Duyệt yêu cầu mượn</h1>
+        <p id="management-zone" class="muted">Giờ CLB · Asia/Bangkok (UTC+7)</p>
+        <p><a id="management-back" href="#management" hidden>Về hàng đợi</a></p>
+        <p id="management-feedback" role="status"></p>
+        <div class="management-actions">
+          <h2 id="management-list-title" hidden>Đang chờ</h2>
+          <button id="management-refresh" type="button" hidden>Làm mới</button>
+        </div>
+        <p id="management-status" role="status"></p>
+        <div id="management-recovery" class="management-actions"></div>
+        <ul id="management-rows" class="assets" aria-label="Yêu cầu mượn" role="list"></ul>
+        <p><a href="#equipment">Về danh mục</a></p>
       </section>
       <p id="action-status" role="status"></p>
     </main>
   </div>
+  <dialog id="decision-dialog" aria-labelledby="decision-title" aria-describedby="decision-summary">
+    <h2 id="decision-title"></h2>
+    <p id="decision-summary"></p>
+    <form method="dialog" class="management-actions">
+      <button value="cancel" autofocus>Hủy</button>
+      <button id="decision-confirm" class="primary" value="confirm">Xác nhận</button>
+    </form>
+  </dialog>
 </body>
 </html>
