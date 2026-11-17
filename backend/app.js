@@ -1,6 +1,6 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
-import { availabilityInput, availableSlots } from './availability.js';
+import { availabilityInput, availableSlots, utcTime } from './availability.js';
 import { sessionSeconds } from './database.js';
 import { hashPassword, verifyPassword } from './password.js';
 
@@ -33,7 +33,7 @@ function hasValidCsrf(req, expected) {
     timingSafeEqual(Buffer.from(value), Buffer.from(expected));
 }
 
-async function credentials(req) {
+async function readJson(req) {
   if (req.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/json') return;
   const chunks = [];
   let size = 0;
@@ -42,15 +42,28 @@ async function credentials(req) {
     if (size > 8192) return;
     chunks.push(chunk);
   }
-  let input;
   try {
-    input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
   } catch {
     return;
   }
+}
+
+async function credentials(req) {
+  const input = await readJson(req);
   if (typeof input?.username !== 'string' || !input.username.trim() || input.username.length > 128 ||
       typeof input.password !== 'string' || !input.password || Buffer.byteLength(input.password) > 1024) return;
   return { username: input.username.trim().toLowerCase(), password: input.password };
+}
+
+const validId = (id) => Number.isInteger(id) && id > 0 && id <= 2147483647;
+
+function loanInput(input) {
+  if (!input || typeof input !== 'object' || Object.keys(input).length !== 3 ||
+      !validId(input.equipment_id)) return;
+  const start = utcTime(input.start_at);
+  const end = utcTime(input.end_at);
+  if (start && end && start < end) return { equipmentId: input.equipment_id, start, end };
 }
 
 function loginLimiter(now) {
@@ -91,6 +104,31 @@ export async function createApp({ store, origin, trustedProxyIp, routes = new Ma
   protectedRoutes.set('GET /equipment', {
     handle: async (_req, res) => json(res, 200, await store.listEquipment()),
   });
+  protectedRoutes.set('POST /loan-requests', {
+    role: 'MEMBER',
+    async handle(req, res, session) {
+      const input = loanInput(await readJson(req));
+      if (!input) return error(res, 400, 'INVALID_INPUT');
+      const loan = await store.createLoanRequest(session.user.id, input);
+      if (!loan) return error(res, 404, 'NOT_FOUND');
+      res.setHeader('Location', '/loan-requests/' + loan.id);
+      json(res, 201, loan);
+    },
+  });
+  protectedRoutes.set('GET /loan-requests', {
+    role: 'MEMBER',
+    handle: async (_req, res, session) => json(res, 200, await store.listLoanRequests(session.user.id)),
+  });
+  const loanDetailRoute = {
+    role: 'MEMBER',
+    async handle(_req, res, session, { id }) {
+      const requestId = Number(id);
+      if (!/^\d+$/.test(id) || !validId(requestId)) return error(res, 400, 'INVALID_INPUT');
+      const loan = await store.readLoanRequest(session.user.id, requestId);
+      if (!loan) return error(res, 404, 'NOT_FOUND');
+      json(res, 200, loan);
+    },
+  };
   const availabilityRoute = {
     roles: new Set(['MEMBER', 'MANAGER']),
     async handle(_req, res, _session, { id, query }) {
@@ -141,7 +179,8 @@ export async function createApp({ store, origin, trustedProxyIp, routes = new Ma
       if (key === 'POST /auth/login') return await login(req, res);
 
       const availability = /^GET \/equipment\/([^/]+)\/availability$/.exec(key);
-      const route = availability ? availabilityRoute : protectedRoutes.get(key);
+      const loanDetail = /^GET \/loan-requests\/([^/]+)$/.exec(key);
+      const route = availability ? availabilityRoute : loanDetail ? loanDetailRoute : protectedRoutes.get(key);
       if (!route) return error(res, 404, 'NOT_FOUND');
 
       const token = sessionToken(req);
@@ -153,8 +192,8 @@ export async function createApp({ store, origin, trustedProxyIp, routes = new Ma
       const csrf = csrfToken(token);
       if (!safeMethods.has(req.method) && !hasValidCsrf(req, csrf)) return error(res, 403, 'CSRF_INVALID');
       const session = { user: identity(user, csrf), hash };
-      if (availability) return await route.handle(req, res, session, { id: availability[1], query: searchParams });
-      await route.handle(req, res, session);
+      const match = availability ?? loanDetail;
+      await route.handle(req, res, session, { id: match?.[1], query: searchParams });
     } catch (cause) {
       logger.error('Lending API request failed', cause.code ?? cause.name);
       if (res.headersSent) return res.destroy();

@@ -23,6 +23,8 @@ function tables(schema = 'dbo') {
 
 export function sqlServerStore(pool, sql, schema) {
   const { users, sessions, equipment, loan_requests } = tables(schema);
+  const loanFields = ['id', 'equipment_id', 'start_at', 'end_at', 'created_at', 'status'];
+  const loanColumns = loanFields.join(', ');
   return {
     async userByUsername(username) {
       const result = await pool.request().input('username', sql.NVarChar(255), username)
@@ -51,6 +53,30 @@ export function sqlServerStore(pool, sql, schema) {
     async listEquipment() {
       const result = await pool.request().query(`SELECT id, asset_code, name FROM ${equipment} ORDER BY asset_code`);
       return result.recordset;
+    },
+    async createLoanRequest(borrowerId, { equipmentId, start, end }) {
+      const result = await pool.request().input('borrower_id', sql.Int, borrowerId)
+        .input('equipment_id', sql.Int, equipmentId)
+        .input('start_utc', sql.DateTime2(3), start).input('end_utc', sql.DateTime2(3), end)
+        .query(`INSERT INTO ${loan_requests} (equipment_id, borrower_id, start_at, end_at, status)
+                OUTPUT ${loanFields.map(field => 'inserted.' + field).join(', ')}
+                SELECT id, @borrower_id, @start_utc, @end_utc, 'PENDING'
+                FROM ${equipment} WITH (HOLDLOCK)
+                WHERE id = @equipment_id`);
+      return result.recordset[0];
+    },
+    async listLoanRequests(borrowerId) {
+      const result = await pool.request().input('borrower_id', sql.Int, borrowerId)
+        .query(`SELECT ${loanColumns} FROM ${loan_requests}
+                WHERE borrower_id = @borrower_id ORDER BY created_at DESC, id DESC`);
+      return result.recordset;
+    },
+    async readLoanRequest(borrowerId, requestId) {
+      const result = await pool.request().input('borrower_id', sql.Int, borrowerId)
+        .input('request_id', sql.Int, requestId)
+        .query(`SELECT ${loanColumns} FROM ${loan_requests}
+                WHERE id = @request_id AND borrower_id = @borrower_id`);
+      return result.recordset[0];
     },
     async readAvailability(equipmentId, from, to) {
       const result = await pool.request().input('equipment_id', sql.Int, equipmentId)
@@ -89,7 +115,7 @@ async function transaction(pool, sql, schema, work) {
 
 export async function migrate(pool, sql, schema = 'dbo') {
   tables(schema);
-  const migrations = ['001-foundation.sql', '002-loan-requests.sql'];
+  const migrations = ['001-foundation.sql', '002-loan-requests.sql', '003-loan-request-borrower-index.sql'];
   const scripts = await Promise.all(migrations.map(file =>
     readFile(new URL('./migrations/' + file, import.meta.url), 'utf8')));
   await transaction(pool, sql, schema, async tx => {

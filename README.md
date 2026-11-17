@@ -12,7 +12,7 @@ npm test
 npm run build
 ```
 
-`npm test` kiểm tra API HTTP bằng dữ liệu tổng hợp, gồm kiểm tra phiên, phân quyền và xác thực đầu vào tra cứu lịch. `npm run build` kiểm tra cú pháp JavaScript của ứng dụng và chép giao diện vào `dist/`. Workflow `lending-validation` chạy ba lệnh trên cho pull request với Node.js 26.
+`npm test` kiểm tra API HTTP bằng dữ liệu tổng hợp, gồm kiểm tra phiên, phân quyền, tra cứu lịch và gửi, liệt kê, xem chi tiết yêu cầu mượn. `npm run build` kiểm tra cú pháp JavaScript của ứng dụng và chép giao diện vào `dist/`. Workflow `lending-validation` chạy ba lệnh trên cho pull request với Node.js 26.
 
 ## Chạy bản demo
 
@@ -35,9 +35,11 @@ npm run build
 4. Mở trực tiếp `/#equipment` và `/#management` khi chưa đăng nhập. Đăng nhập lần lượt bằng `demo.member` và `demo.manager`, kiểm tra hai mã thiết bị `DEMO-01` và `DEMO-02`, tải lại trang rồi đăng xuất. Thành viên thấy thông báo thiếu quyền tại màn Quản lý. Xem [kịch bản kiểm tra giao diện](frontend/README.md).
 5. Với database demo mới chạy migration và seed, mở **Xem lịch** cho `DEMO-01`, nhập ngày 16/11/2026 từ 09:00 đến 13:00 và tra cứu. Kiểm tra giao diện hiển thị toàn bộ khoảng 09:00–13:00 theo Asia/Bangkok (UTC+07:00). Trong tab Network, kiểm tra yêu cầu `/equipment/{id}/availability` qua `https://localhost:8443` trả JSON `200` và chỉ có thông tin thiết bị, múi giờ và các mốc thời gian. Lặp lại với `DEMO-02` và tài khoản quản lý. Các ca có lịch bận dùng fixture tổng hợp trong [hướng dẫn frontend](frontend/README.md#kiểm-tra-lịch-trống-story-112).
 
+6. Với `demo.member`, mở **Yêu cầu của tôi** và thực hiện [kịch bản Story #113](frontend/README.md#chạy-thử-story-113). Kiểm tra giờ bắt đầu phải trước giờ kết thúc, hai lượt gửi trùng giờ đều **Chờ duyệt** và chi tiết sau khi tải lại. Ca truy cập bằng thành viên thứ hai cần tài khoản thành viên tổng hợp bổ sung. Bộ kiểm thử SQL Server tạo sẵn tài khoản này trong schema kiểm thử.
+
 ## Kiểm thử với SQL Server
 
-Đặt `TEST_DATABASE_URL` trỏ tới database riêng `ClubEquipmentLending_Test` với quyền tạo và xóa schema thử nghiệm. Nếu dùng ODBC, đặt `SQLSERVER_DRIVER=odbc`. Chạy `npm run test:sqlserver` từ thư mục gốc để kiểm tra migration, seed lặp lại, hai ID thiết bị, vòng đời phiên và lịch trống với dữ liệu tổng hợp cho từng trạng thái yêu cầu. Bộ kiểm thử tự tạo và dọn fixture trong schema riêng. Dùng dữ liệu tổng hợp cho cả database demo và test.
+Đặt `TEST_DATABASE_URL` trỏ tới database riêng `ClubEquipmentLending_Test` với quyền tạo và xóa schema thử nghiệm. Nếu dùng ODBC, đặt `SQLSERVER_DRIVER=odbc`. Chạy `npm run test:sqlserver` từ thư mục gốc để kiểm tra migration, seed lặp lại, hai ID thiết bị, vòng đời phiên và lịch trống với dữ liệu tổng hợp cho từng trạng thái yêu cầu. Bài kiểm thử cũng gửi đồng thời hai yêu cầu trùng giờ, xác nhận cả hai được lưu với mã riêng ở trạng thái `PENDING` và kiểm tra truy cập từ thành viên khác. Bộ kiểm thử tự tạo và dọn fixture trong schema riêng. Dùng dữ liệu tổng hợp cho cả database demo và test.
 
 ## Xác minh SQL Server trên máy điều hành
 

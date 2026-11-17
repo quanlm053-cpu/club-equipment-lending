@@ -100,6 +100,50 @@ test('SQL Server migration, repeatable demo seed and session lifecycle through H
   await expectSlots(first.id, '2026-11-15T23:00:00.123Z', at('08:00'),
     [['2026-11-15T23:00:00.123Z', at('00:00')], [at('04:00'), at('06:00')], [at('07:00'), at('08:00')]]);
   await expectSlots(second.id, at('02:00'), at('06:00'), [[at('02:00'), at('06:00')]]);
+  await query(`INSERT INTO ${users} (username, role, password_hash)
+               SELECT 'demo.member.two', role, password_hash FROM ${users} WHERE username = 'demo.member'`);
+  const other = await login(request, 'demo.member.two', env.DEMO_MEMBER_PASSWORD);
+  assert.equal(other.status, 200);
+  const otherUser = await other.json();
+  const path = '/loan-requests';
+  const auth = response => ({ headers: { Cookie: cookie(response) } });
+  const post = (response, csrf, start, end) => request(path, {
+    method: 'POST',
+    headers: { Cookie: cookie(response), 'X-CSRF-Token': csrf, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ equipment_id: second.id, start_at: start, end_at: end }),
+  });
+  assert.deepEqual(await (await request(path, auth(other))).json(), []);
+  const [firstPost, secondPost] = await Promise.all([
+    post(member, memberUser.csrf_token, '2026-11-16T09:00:00+07:00', '2026-11-16T10:00:00+07:00'),
+    post(other, otherUser.csrf_token, '2026-11-16T09:30:00+07:00', '2026-11-16T10:30:00+07:00'),
+  ]);
+  const [firstLoan, secondLoan] = await Promise.all([firstPost.json(), secondPost.json()]);
+  for (const [response, loan] of [[firstPost, firstLoan], [secondPost, secondLoan]]) {
+    assert.equal(response.status, 201);
+    assert.equal(response.headers.get('location'), path + '/' + loan.id);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(Object.keys(loan).sort(), ['created_at', 'end_at', 'equipment_id', 'id', 'start_at', 'status']);
+    assert.equal(loan.status, 'PENDING');
+    assert.equal(loan.equipment_id, second.id);
+  }
+  assert.notEqual(firstLoan.id, secondLoan.id);
+  assert.equal(firstLoan.start_at, at('02:00'));
+  assert.equal(firstLoan.end_at, at('03:00'));
+  assert.deepEqual(await (await request(path, auth(other))).json(), [secondLoan]);
+  assert.deepEqual((await (await request(path, auth(member))).json())
+    .filter(loan => loan.equipment_id === second.id), [firstLoan]);
+  await expectSlots(second.id, at('02:00'), at('06:00'), [[at('02:00'), at('06:00')]]);
+  await expectError(await request(path + '/' + firstLoan.id, auth(other)), 404, 'NOT_FOUND');
+  await expectError(await request(path + '/2147483647', auth(other)), 404, 'NOT_FOUND');
+  await query(`UPDATE ${loans} SET status = 'APPROVED' WHERE id = ${firstLoan.id}`);
+  assert.deepEqual(await (await request(path + '/' + firstLoan.id, auth(member))).json(),
+    { ...firstLoan, status: 'APPROVED' });
+  await query(`UPDATE ${loans} SET created_at = '2026-11-16T02:00:00' WHERE borrower_id = ${memberUser.id}`);
+  const memberLoans = await (await request(path, auth(member))).json();
+  assert.deepEqual(memberLoans.map(loan => loan.id), memberLoans.map(loan => loan.id).sort((a, b) => b - a));
+  await request('/auth/logout', {
+    method: 'POST', headers: { Cookie: cookie(other), 'X-CSRF-Token': otherUser.csrf_token },
+  });
   await query(`UPDATE ${loans} SET status = 'RETURNED' WHERE status = 'HANDED_OVER'`);
   await expectSlots(first.id, at('02:00'), at('06:00'), [[at('03:00'), at('06:00')]]);
 

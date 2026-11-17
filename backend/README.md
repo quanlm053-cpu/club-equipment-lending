@@ -1,4 +1,4 @@
-# Bàn giao backend Story #111 và #112
+# Bàn giao backend Story #111–113
 
 ## Khởi tạo
 
@@ -45,10 +45,24 @@ Mỗi phần tử `available` có `start_at` và `end_at` theo UTC, sắp xếp 
 
 Xử lý `400 INVALID_INPUT` bằng cách giữ và cho sửa đầu vào. Với `401 AUTH_REQUIRED`, quay lại luồng đăng nhập. Với `403 FORBIDDEN`, báo thiếu quyền. Với `404 NOT_FOUND`, cho tải lại danh mục. Với `500 INTERNAL_ERROR` hoặc lỗi mạng, cho thử lại cùng đầu vào. Khi đầu vào thay đổi, xóa kết quả cũ và bỏ qua phản hồi của lượt đã bị thay thế.
 
+### Gửi và theo dõi yêu cầu mượn Story #113
+
+Chạy `npm run migrate` để bổ sung chỉ mục đọc theo người mượn trên bảng `loan_requests` của #112. Ba tuyến dưới đây dùng cookie phiên có vai trò `MEMBER` và trả `Cache-Control: no-store`.
+
+| API | Yêu cầu và phản hồi |
+| --- | --- |
+| `POST /loan-requests` | Gửi JSON chỉ gồm `equipment_id` kiểu số nguyên, `start_at`, `end_at` và header `X-CSRF-Token`. Nhận `201`, đối tượng đã lưu ở trạng thái `PENDING` và `Location: /loan-requests/{id}`. Các lượt gửi trùng giờ tạo các ID riêng. |
+| `GET /loan-requests` | Nhận `200` với mảng yêu cầu của phiên, sắp theo thời điểm tạo giảm dần rồi ID giảm dần. |
+| `GET /loan-requests/{id}` | Nhận `200` với chi tiết hiện hành của yêu cầu thuộc phiên. |
+
+Mỗi đối tượng có `id`, `equipment_id`, `start_at`, `end_at`, `created_at` và `status`. Nối tên và mã tài sản từ `GET /equipment`. Gửi mốc ISO 8601 có giây, offset và tối đa ba chữ số phần giây. API trả UTC, FE hiển thị theo Asia/Bangkok. Khi chuyển từ lịch #112 sang biểu mẫu, đề xuất dùng `equipment_id`, `start_at`, `end_at` làm tên tham số điền sẵn trên URL giao diện. Tạo URL bằng `URLSearchParams` và để thành viên kiểm tra lại trước khi gửi. Dùng đường dẫn giao diện riêng để hiển thị chi tiết sau khi tạo.
+
+`404 NOT_FOUND` khi POST nghĩa là thiết bị không tồn tại. Khi GET chi tiết, cùng phản hồi này áp dụng cho ID chưa tồn tại và yêu cầu của thành viên khác. Giữ dữ liệu nhập khi nhận `400 INVALID_INPUT`. Nếu POST mất phản hồi hoặc trả `500 INTERNAL_ERROR`, hướng dẫn thành viên kiểm tra danh sách trước khi gửi lại.
+
 ## Kiểm thử
 
 - `npm test` chạy kiểm thử HTTP với kho dữ liệu thử nghiệm trong bộ nhớ.
-- `npm run test:sqlserver` chạy migration, seed hai lần và kiểm thử phiên cùng API lịch trên Microsoft SQL Server. Đặt `TEST_DATABASE_URL` trỏ tới DB kiểm thử dùng dữ liệu tổng hợp. Tài khoản DB cần quyền tạo schema thử nghiệm. Bộ kiểm thử tạo và dọn schema riêng.
+- `npm run test:sqlserver` chạy migration, seed hai lần và kiểm thử phiên, lịch và API yêu cầu mượn trên Microsoft SQL Server. Đặt `TEST_DATABASE_URL` trỏ tới DB kiểm thử dùng dữ liệu tổng hợp. Tài khoản DB cần quyền tạo schema thử nghiệm. Bộ kiểm thử tạo và dọn schema riêng.
 
 ### SQL Server kiểm thử trên máy Windows
 

@@ -13,6 +13,7 @@
     <nav aria-label="Điều hướng chính">
       <span id="role"></span>
       <a href="#equipment" id="equipment-link" hidden>Danh mục</a>
+      <a href="#requests" id="requests-link" hidden>Yêu cầu của tôi</a>
       <a href="#management" id="management-link" hidden>Quản lý</a>
       <button type="button" id="logout" hidden>Đăng xuất</button>
     </nav>
@@ -84,6 +85,63 @@
             <a href="#equipment" id="reload-catalog" hidden>Tải lại danh mục</a>
           </section>
         </div>
+      </section>
+      <section id="requests" aria-labelledby="requests-title" hidden>
+        <div class="request-heading">
+          <h1 id="requests-title" tabindex="-1">Yêu cầu của tôi</h1>
+          <a id="new-request-link" class="request-primary" href="#request/new">Gửi yêu cầu</a>
+        </div>
+        <p class="muted">Giờ CLB (UTC+7)</p>
+        <p id="requests-status" role="status"></p>
+        <button type="button" data-request-retry hidden>Thử lại</button>
+        <ul id="request-rows" class="assets" role="list"></ul>
+      </section>
+      <section id="request-detail" aria-labelledby="request-detail-title" hidden>
+        <div class="request-heading">
+          <h1 id="request-detail-title" tabindex="-1">Chi tiết yêu cầu</h1>
+          <span id="request-badge" class="request-badge" hidden></span>
+        </div>
+        <p id="request-confirmation" role="status" hidden></p>
+        <p id="request-detail-status" role="status"></p>
+        <button type="button" data-request-retry hidden>Thử lại</button>
+        <div id="request-data" hidden>
+          <p class="muted">Giờ CLB (UTC+7)</p>
+          <dl class="request-grid">
+            <div><dt>Thiết bị</dt><dd id="detail-device"></dd></div>
+            <div><dt>Thời điểm gửi</dt><dd id="detail-created"></dd></div>
+            <div><dt>Bắt đầu</dt><dd id="detail-start"></dd></div>
+            <div><dt>Kết thúc</dt><dd id="detail-end"></dd></div>
+          </dl>
+        </div>
+        <p><a href="#requests">Về danh sách yêu cầu</a></p>
+      </section>
+      <section id="request-new" aria-labelledby="request-new-title" hidden>
+        <h1 id="request-new-title" tabindex="-1">Gửi yêu cầu</h1>
+        <p class="muted">Giờ CLB (UTC+7)</p>
+        <p id="request-catalog-status" role="status"></p>
+        <button type="button" id="request-catalog-retry" hidden>Thử lại</button>
+        <form id="request-form" novalidate hidden>
+          <p id="request-submit-status" role="status"></p>
+          <fieldset id="request-fields" disabled>
+            <label for="request-device">Thiết bị</label>
+            <select id="request-device" required aria-describedby="request-device-error"></select>
+            <small id="request-device-error" class="error"></small>
+            <div class="request-grid">
+              <div>
+                <label for="request-start">Bắt đầu</label>
+                <input id="request-start" type="datetime-local" step="any" required aria-describedby="request-start-error">
+                <small id="request-start-error" class="error"></small>
+              </div>
+              <div>
+                <label for="request-end">Kết thúc</label>
+                <input id="request-end" type="datetime-local" step="any" required aria-describedby="request-end-error">
+                <small id="request-end-error" class="error"></small>
+              </div>
+            </div>
+            <button type="submit" class="primary">Gửi yêu cầu</button>
+          </fieldset>
+        </form>
+        <p><a href="#requests">Về danh sách yêu cầu</a></p>
       </section>
       <section id="management" aria-labelledby="management-title" hidden>
         <h1 id="management-title" tabindex="-1">Quản lý</h1>
