@@ -12,7 +12,7 @@ npm test
 npm run build
 ```
 
-`npm test` kiểm tra API HTTP bằng dữ liệu tổng hợp, gồm phiên, phân quyền, tra cứu lịch, gửi và theo dõi yêu cầu mượn, hàng đợi quản lý và phản hồi khi duyệt hoặc từ chối. `npm run build` kiểm tra cú pháp JavaScript của ứng dụng và chép giao diện vào `dist/`. Workflow `lending-validation` chạy ba lệnh trên cho pull request với Node.js 26.
+`npm test` kiểm tra API HTTP bằng dữ liệu tổng hợp, gồm phiên, phân quyền, tra cứu lịch, gửi và theo dõi yêu cầu mượn, hàng đợi quản lý, duyệt, từ chối và xác nhận giao. Lệnh này cũng chạy kiểm thử hồi quy quản lý phiên của frontend với API mô phỏng. `npm run build` kiểm tra cú pháp JavaScript của ứng dụng và chép giao diện vào `dist/`. Workflow `lending-validation` chạy ba lệnh trên cho pull request với Node.js 26.
 
 ## Chạy bản demo
 
@@ -37,6 +37,7 @@ npm run build
 
 6. Với `demo.member`, mở **Yêu cầu của tôi** và thực hiện [kịch bản Story #113](frontend/README.md#chạy-thử-story-113). Kiểm tra giờ bắt đầu phải trước giờ kết thúc, hai lượt gửi trùng giờ đều **Chờ duyệt** và chi tiết sau khi tải lại. Ca truy cập bằng thành viên thứ hai cần tài khoản thành viên tổng hợp bổ sung. Bộ kiểm thử SQL Server tạo sẵn tài khoản này trong schema kiểm thử.
 7. Thực hiện [kịch bản Story #114](frontend/README.md#chạy-thử-story-114) sau khi migration đã áp dụng `004-loan-events.sql`. Dùng hai cửa sổ có phiên độc lập để kiểm tra đồng thời. Xác nhận yêu cầu trùng giờ bị xung đột vẫn nằm trong hàng đợi và có thể được từ chối. Duyệt tiếp yêu cầu sát biên trên cùng thiết bị và yêu cầu cùng giờ trên thiết bị khác.
+8. Thực hiện [kịch bản Story #115](frontend/README.md#chạy-thử-story-115) sau khi migration đã áp dụng `005-loan-request-active-holder.sql`. Duyệt hai yêu cầu sát biên cho cùng thiết bị, rồi giao lượt đầu từ **Yêu cầu đã duyệt**. Khi thử giao lượt kế tiếp, kiểm tra phản hồi `409 EQUIPMENT_IN_USE` trong tab Network và xác nhận lượt này vẫn **Đã duyệt**. Tải lại danh sách và chi tiết trong phiên thành viên để thấy lượt đầu **Đã giao**.
 
 ## Kiểm thử với SQL Server
 
@@ -44,6 +45,7 @@ npm run build
 
 ## Xác minh SQL Server trên máy điều hành
 
+- Story #115 đạt 2/2 theo log `1794917357493976400-story-115-sqlserver.log` của bộ điều phối. Bộ kiểm thử xác nhận giao đồng thời trên cùng thiết bị, trạng thái của lượt bị chặn và lượt đã giao khi thành viên đọc lại, người giao và thời điểm giao, cùng việc hoàn tác khi không ghi được sự kiện.
 - Story #114 đạt 2/2 trên cùng checkout theo log `1794915959443558300-story-114-sqlserver.log` của bộ điều phối. Bài kiểm thử qua HTTP xác nhận đúng một lượt duyệt thành công khi chồng giờ trên cùng thiết bị, lượt còn lại nhận `409 SCHEDULE_CONFLICT` và giữ `PENDING`. Các ca sát biên, khác thiết bị và hoàn tác khi ghi sự kiện lỗi đều đạt.
 - Story #112 đạt 1/1 trên cùng checkout theo log `1794747700991673500-story-112-sqlserver.log` của bộ điều phối.
 - Xem [kết quả kiểm thử tích hợp Story #111](story-111-sqlserver-verification.md).

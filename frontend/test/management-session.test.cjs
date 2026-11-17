@@ -11,23 +11,35 @@ const pending = { id: 42, status: 'PENDING' };
 function setup() {
   const nodes = new Map();
   const requests = [];
+  function element() {
+    return {
+      children: [],
+      dataset: {},
+      addEventListener() {},
+      append(...children) { this.children.push(...children); },
+      close() {},
+      contains() { return false; },
+      focus() {},
+      replaceChildren(...children) { this.children = children; },
+      reset() {},
+      removeAttribute() {},
+      setAttribute() {},
+      classList: { toggle() {} },
+    };
+  }
   const app = runInNewContext(source + `
     user = initialSession;
-    ({ checkSession, logout, submitDecision, managementBusy, managementDecisions, getUser: () => user });
+    ({ checkSession, logout, submitDecision, managementBusy, managementDecisions, getUser: () => user,
+      showApprovedDetail(item) {
+        managementView = { id: item.id, approved: true, items: [item] };
+        renderManagement(managementView);
+      } });
   `, {
     initialSession: { ...manager },
     document: {
+      createElement: element,
       getElementById(id) {
-        if (!nodes.has(id)) nodes.set(id, {
-          addEventListener() {},
-          close() {},
-          focus() {},
-          replaceChildren() {},
-          reset() {},
-          removeAttribute() {},
-          setAttribute() {},
-          classList: { toggle() {} },
-        });
+        if (!nodes.has(id)) nodes.set(id, element());
         return nodes.get(id);
       },
       querySelectorAll: () => [],
@@ -46,6 +58,7 @@ function setup() {
   });
   return {
     ...app,
+    nodes,
     take(path, method = 'GET') {
       const request = requests.shift();
       assert.equal(request?.path, path);
@@ -57,6 +70,32 @@ function setup() {
 }
 
 const flush = () => new Promise(setImmediate);
+
+test('handover preserves the rendered detail when POST returns only loan fields', async () => {
+  const item = {
+    id: 42,
+    status: 'APPROVED',
+    equipment_name: 'Máy chiếu demo',
+    equipment_asset_code: 'DEMO-01',
+    borrower_username: 'demo-member',
+    start_at: '2026-11-17T09:00:00Z',
+    end_at: '2026-11-17T10:00:00Z',
+    created_at: '2026-11-17T08:00:00Z',
+  };
+  const app = setup();
+  app.showApprovedDetail(item);
+  const submitting = app.submitDecision({ item, verb: 'handover', user: app.getUser() });
+  const { equipment_name, equipment_asset_code, borrower_username, ...loan } = item;
+  app.take('/loan-requests/42/handover', 'POST').resolve(Response.json({ ...loan, status: 'HANDED_OVER' }));
+  await submitting;
+
+  const [row] = app.nodes.get('management-rows').children;
+  const [info, actions] = row.children;
+  assert.equal(info.children[0].textContent, `${equipment_name} · ${equipment_asset_code}`);
+  assert.equal(info.children[2].textContent, `YC-42 · Người gửi ${borrower_username}`);
+  assert.equal(info.children.at(-1).textContent, 'Đã giao');
+  assert.equal(actions.children.length, 0);
+});
 
 for (const [verb, status] of [['approve', 'APPROVED'], ['reject', 'REJECTED']]) {
   test(`${verb} releases the queue after the same session is verified`, async () => {

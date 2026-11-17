@@ -245,6 +245,65 @@ test('SQL Server migration, repeatable demo seed and session lifecycle through H
     }
     assert.equal((await decide(rollback, 'approve')).status, 200);
     assert.equal((await history(rollback)).length, 1);
+
+    const approvedQueue = async () => (await request(path + '?status=APPROVED', auth(manager))).json();
+    assert.ok((await approvedQueue()).some(row => row.id === edgeLeft.id && row.status === 'APPROVED'));
+    // Simulate the persisted result of return (#116) for the earlier availability fixtures.
+    await expectError(await decide(edgeLeft, 'handover'), 409, 'EQUIPMENT_IN_USE');
+    assert.equal((await detail(edgeLeft)).status, 'APPROVED');
+    assert.deepEqual((await history(edgeLeft)).map(row => row.to_status), ['APPROVED']);
+    await query(`UPDATE ${loans} SET status = 'RETURNED' WHERE status = 'HANDED_OVER'`);
+
+    await query(`ALTER TABLE ${events} ADD CONSTRAINT test_handover_failure
+                 CHECK (request_id <> ${edgeLeft.id} OR to_status <> 'HANDED_OVER')`);
+    try {
+      await expectError(await decide(edgeLeft, 'handover'), 500, 'INTERNAL_ERROR');
+      assert.equal((await detail(edgeLeft)).status, 'APPROVED');
+      assert.deepEqual((await history(edgeLeft)).map(row => row.to_status), ['APPROVED']);
+    } finally {
+      await query(`ALTER TABLE ${events} DROP CONSTRAINT test_handover_failure`);
+    }
+
+    const utcNow = async () => (await query('SELECT CAST(SYSUTCDATETIME() AS datetime2(3)) AS now')).recordset[0].now;
+    const before = await utcNow();
+    const adjacent = [edgeLeft, edgeRight];
+    const handovers = await Promise.all([
+      decide(edgeLeft, 'handover'), decide(edgeRight, 'handover', true),
+    ]);
+    assert.deepEqual(handovers.map(row => row.status).sort(), [200, 409]);
+    const deliveredIndex = handovers.findIndex(row => row.status === 200);
+    const delivered = adjacent[deliveredIndex];
+    const waiting = adjacent[1 - deliveredIndex];
+    const after = await utcNow();
+    assert.deepEqual(await handovers[deliveredIndex].json(),
+      { ...delivered, status: 'HANDED_OVER', borrower_id: memberUser.id });
+    await expectError(handovers[1 - deliveredIndex], 409, 'EQUIPMENT_IN_USE');
+    assert.equal((await detail(waiting)).status, 'APPROVED');
+    assert.equal((await detail(delivered, member)).status, 'HANDED_OVER');
+    await expectError(await request(path + '/' + delivered.id, auth(other)), 404, 'NOT_FOUND');
+    assert.ok((await (await request(path, auth(member))).json())
+      .some(row => row.id === delivered.id && row.status === 'HANDED_OVER'));
+    const approvedIds = (await approvedQueue()).map(row => row.id);
+    assert.ok(approvedIds.includes(waiting.id));
+    assert.ok(!approvedIds.includes(delivered.id));
+    const deliveryEvents = (await history(...adjacent)).filter(row => row.to_status === 'HANDED_OVER');
+    assert.equal(deliveryEvents.length, 1);
+    const [delivery] = deliveryEvents;
+    assert.deepEqual([delivery.request_id, delivery.actor_id, delivery.from_status],
+      [delivered.id, managerUser.id, 'APPROVED']);
+    assert.ok(delivery.occurred_at >= before && delivery.occurred_at <= after);
+    await assert.rejects(query(`UPDATE ${loans} SET status = 'HANDED_OVER' WHERE id = ${waiting.id}`),
+      error => Number(error.number) === 2601);
+
+    const duplicates = await Promise.all([
+      decide(different, 'handover'), decide(different, 'handover', true),
+    ]);
+    assert.deepEqual(duplicates.map(row => row.status).sort(), [200, 409]);
+    await expectError(duplicates.find(row => row.status === 409), 409, 'INVALID_TRANSITION');
+    assert.equal((await history(different)).filter(row => row.to_status === 'HANDED_OVER').length, 1);
+    await query(`UPDATE ${loans} SET status = 'RETURNED' WHERE id = ${delivered.id}`);
+    assert.equal((await decide(waiting, 'handover')).status, 200);
+
     await requestTwo('/auth/logout', {
       method: 'POST', headers: { Cookie: cookie(managerTwo), 'X-CSRF-Token': managerTwoUser.csrf_token },
     });

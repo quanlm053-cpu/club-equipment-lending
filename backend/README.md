@@ -80,3 +80,10 @@ Các lệnh đổi trạng thái khóa dòng thiết bị trước rồi khóa y
 ### SQL Server kiểm thử trên máy Windows
 
 Dùng database riêng `ClubEquipmentLending_Test` và tài khoản Windows có quyền tạo schema test. Với kết nối shared memory qua ODBC Driver 17, đặt `SQLSERVER_DRIVER=odbc` và cấu hình `TEST_DATABASE_URL` bằng chuỗi ODBC phù hợp với máy. Kết quả xác minh SQL Server trước đây của Story #111 nằm trong [bàn giao #111](../story-111-sqlserver-verification.md).
+
+## Bàn giao FE · Xác nhận giao thiết bị (#115)
+
+- Quản lý gọi `GET /loan-requests?status=APPROVED` để lấy danh sách đã duyệt với cùng các trường của hàng đợi #114. Mở và tải lại chi tiết bằng `GET /loan-requests/{id}`. Thành viên dùng API danh sách và chi tiết hiện có để đọc trạng thái của yêu cầu mình sở hữu.
+- Quản lý gọi `POST /loan-requests/{id}/handover` với cookie phiên, header `X-CSRF-Token` và body rỗng. Phản hồi `200` có cùng các trường với lệnh duyệt #114 và `status: "HANDED_OVER"`. Hiển thị **Đã giao** và làm mới danh sách đã duyệt. Người giao và thời điểm UTC lưu trong nhật ký nội bộ.
+- Với `409 EQUIPMENT_IN_USE`, giữ **Đã duyệt** và hiển thị **Thiết bị vẫn đang được giữ. Hãy xác nhận nhận lại trước khi giao lượt này.** Với `409 INVALID_TRANSITION`, tải lại chi tiết để lấy trạng thái hiện tại. Nếu mất phản hồi hoặc gặp `500 INTERNAL_ERROR`, tải lại chi tiết trước khi cho phép gửi lại.
+- Các lỗi còn lại gồm `400 INVALID_REQUEST` cho ID giao sai định dạng, `404 NOT_FOUND`, `401 AUTH_REQUIRED` và `403 FORBIDDEN` hoặc `CSRF_INVALID`.

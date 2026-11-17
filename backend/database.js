@@ -6,6 +6,7 @@ const decisionErrors = new Map([
   [51040, 'NOT_FOUND'],
   [51041, 'INVALID_TRANSITION'],
   [51042, 'SCHEDULE_CONFLICT'],
+  [51043, 'EQUIPMENT_IN_USE'],
 ]);
 
 export async function connectDatabase(env = process.env) {
@@ -90,9 +91,9 @@ export function sqlServerStore(pool, sql, schema) {
                 WHERE id = @request_id AND borrower_id = @borrower_id`);
       return result.recordset[0];
     },
-    async listPendingLoanRequests() {
-      const result = await pool.request().query(`${managedLoans}
-        WHERE r.status = 'PENDING' ORDER BY r.created_at, r.id`);
+    async listManagedLoanRequests(status) {
+      const result = await pool.request().input('status', sql.VarChar(16), status).query(`${managedLoans}
+        WHERE r.status = @status ORDER BY r.created_at, r.id`);
       return result.recordset;
     },
     async readManagedLoanRequest(requestId) {
@@ -112,6 +113,7 @@ export function sqlServerStore(pool, sql, schema) {
               BEGIN TRANSACTION;
               DECLARE @equipment_id int, @locked_equipment_id int;
               DECLARE @status varchar(16), @start_at datetime2(3), @end_at datetime2(3);
+              DECLARE @source varchar(16) = CASE WHEN @target = 'HANDED_OVER' THEN 'APPROVED' ELSE 'PENDING' END;
               DECLARE @updated TABLE (
                 id int, equipment_id int, start_at datetime2(3), end_at datetime2(3),
                 created_at datetime2(3), status varchar(16), borrower_id int
@@ -126,10 +128,10 @@ export function sqlServerStore(pool, sql, schema) {
               IF @locked_equipment_id IS NULL THROW 51050, 'INTEGRITY_ERROR', 1;
 
               SELECT @status = status, @start_at = start_at, @end_at = end_at
-              FROM ${loan_requests} WITH (UPDLOCK)
+              FROM ${loan_requests} WITH (UPDLOCK, HOLDLOCK)
               WHERE id = @request_id AND equipment_id = @locked_equipment_id;
               IF @status IS NULL THROW 51040, 'NOT_FOUND', 1;
-              IF @status <> 'PENDING' THROW 51041, 'INVALID_TRANSITION', 1;
+              IF @status <> @source THROW 51041, 'INVALID_TRANSITION', 1;
 
               IF @target = 'APPROVED' AND EXISTS (
                 SELECT 1 FROM ${loan_requests}
@@ -138,15 +140,29 @@ export function sqlServerStore(pool, sql, schema) {
                   AND start_at < @end_at AND end_at > @start_at
               ) THROW 51042, 'SCHEDULE_CONFLICT', 1;
 
-              UPDATE ${loan_requests}
-              SET status = @target
-              OUTPUT ${[...loanFields, 'borrower_id'].map(field => 'inserted.' + field).join(', ')}
-                INTO @updated (${loanColumns}, borrower_id)
-              WHERE id = @request_id AND status = 'PENDING';
-              IF @@ROWCOUNT <> 1 THROW 51041, 'INVALID_TRANSITION', 1;
+              IF @target = 'HANDED_OVER' AND EXISTS (
+                SELECT 1 FROM ${loan_requests}
+                WHERE equipment_id = @locked_equipment_id AND status = 'HANDED_OVER' AND id <> @request_id
+              ) THROW 51043, 'EQUIPMENT_IN_USE', 1;
 
-              INSERT INTO ${loan_events} (request_id, actor_id, from_status, to_status)
-              VALUES (@request_id, @actor_id, @status, @target);
+              DECLARE @now datetime2(3) = SYSUTCDATETIME();
+              BEGIN TRY
+                UPDATE ${loan_requests}
+                SET status = @target
+                OUTPUT ${[...loanFields, 'borrower_id'].map(field => 'inserted.' + field).join(', ')}
+                  INTO @updated (${loanColumns}, borrower_id)
+                WHERE id = @request_id AND status = @source;
+                IF @@ROWCOUNT <> 1 THROW 51041, 'INVALID_TRANSITION', 1;
+              END TRY
+              BEGIN CATCH
+                IF @target = 'HANDED_OVER' AND ERROR_NUMBER() = 2601
+                  AND CHARINDEX(N'''UX_loan_requests_equipment_handed_over''', ERROR_MESSAGE()) > 0
+                  THROW 51043, 'EQUIPMENT_IN_USE', 1;
+                THROW;
+              END CATCH;
+
+              INSERT INTO ${loan_events} (request_id, actor_id, from_status, to_status, occurred_at)
+              VALUES (@request_id, @actor_id, @status, @target, @now);
 
               COMMIT TRANSACTION;
               SELECT ${loanColumns}, borrower_id FROM @updated;
@@ -202,6 +218,7 @@ export async function migrate(pool, sql, schema = 'dbo') {
   tables(schema);
   const migrations = [
     '001-foundation.sql', '002-loan-requests.sql', '003-loan-request-borrower-index.sql', '004-loan-events.sql',
+    '005-loan-request-active-holder.sql',
   ];
   const scripts = await Promise.all(migrations.map(file =>
     readFile(new URL('./migrations/' + file, import.meta.url), 'utf8')));
