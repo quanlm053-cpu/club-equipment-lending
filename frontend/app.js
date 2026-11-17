@@ -78,16 +78,20 @@ function show(screen) {
   byId('equipment-link').hidden = !user;
   byId('management-link').hidden = !manager;
   byId('approved-link').hidden = !manager;
+  byId('handed-over-link').hidden = !manager;
   byId('requests-link').hidden = user?.role !== 'MEMBER';
   for (const id of ['equipment', 'management', 'requests']) {
     const link = byId(id + '-link');
-    if ((id === screen && (id !== 'management' || !isApprovedRoute(location.hash)))
+    if ((id === screen && (id !== 'management' || managementListRoute(location.hash) === '#management'))
       || (id === 'equipment' && screen === 'availability')) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   }
-  if (screen === 'management' && isApprovedRoute(location.hash)) {
-    byId('approved-link').setAttribute('aria-current', 'page');
-  } else byId('approved-link').removeAttribute('aria-current');
+  for (const [route, id] of [[approvedRoute, 'approved-link'], [handedOverRoute, 'handed-over-link']]) {
+    const link = byId(id);
+    if (screen === 'management' && managementListRoute(location.hash) === route) {
+      link.setAttribute('aria-current', 'page');
+    } else link.removeAttribute('aria-current');
+  }
   byId(screen + '-title').focus();
 }
 
@@ -102,7 +106,7 @@ function endSession(text = '') {
 }
 
 function expired() {
-  if (isApprovedRoute(location.hash)) loanLoginRoute = location.hash;
+  if (isManagementRoute(location.hash)) loanLoginRoute = location.hash;
   endSession('Phiên đã hết hạn. Vui lòng đăng nhập lại.');
 }
 
@@ -467,17 +471,25 @@ const managementDecisions = new Map();
 const decisionDialog = byId('decision-dialog');
 let decisionSelection;
 const approvedRoute = '#management/approved';
+const handedOverRoute = '#management/handed-over';
 
-function isApprovedRoute(hash) {
-  return hash === approvedRoute || hash.startsWith(approvedRoute + '/');
+function managementListRoute(hash) {
+  return [approvedRoute, handedOverRoute].find((route) => hash === route || hash.startsWith(route + '/'))
+    || '#management';
 }
 
 function managementListPath(view) {
+  if (view.handedOver) return '/loan-requests?status=HANDED_OVER';
   return '/loan-requests' + (view.approved ? '?status=APPROVED' : '');
 }
 
+function managementListLabel(view) {
+  if (view.handedOver) return 'Đã giao';
+  return view.approved ? 'Đã duyệt' : 'Đang chờ';
+}
+
 function managementEmpty(view) {
-  return view.approved ? 'Chưa có yêu cầu đã duyệt.' : 'Chưa có yêu cầu đang chờ.';
+  return 'Chưa có yêu cầu ' + managementListLabel(view).toLowerCase() + '.';
 }
 
 function isManagementRoute(hash) {
@@ -487,33 +499,39 @@ function isManagementRoute(hash) {
 function showManagement() {
   show('management');
   const manager = user.role === 'MANAGER';
-  const approved = isApprovedRoute(location.hash);
-  const listRoute = approved ? approvedRoute : '#management';
+  const listRoute = managementListRoute(location.hash);
+  const approved = listRoute === approvedRoute;
+  const handedOver = listRoute === handedOverRoute;
   const detail = location.hash !== listRoute;
-  const id = Number(/^#management\/(?:approved\/)?(\d+)$/.exec(location.hash)?.[1]);
+  const id = Number(/^\/(\d+)$/.exec(location.hash.slice(listRoute.length))?.[1]);
   const back = byId('management-back');
   back.href = listRoute;
-  back.textContent = approved ? 'Về danh sách đã duyệt' : 'Về hàng đợi';
+  back.textContent = handedOver ? 'Về danh sách đã giao' : approved ? 'Về danh sách đã duyệt' : 'Về hàng đợi';
   byId('management-zone').hidden = !manager;
   byId('management-back').hidden = !manager || !detail;
   byId('management-list-title').hidden = !manager || detail;
   byId('management-refresh').hidden = true;
   byId('management-title').textContent = detail ? 'Chi tiết yêu cầu'
-    : approved ? 'Yêu cầu đã duyệt' : 'Duyệt yêu cầu mượn';
+    : handedOver ? 'Yêu cầu đã giao' : approved ? 'Yêu cầu đã duyệt' : 'Duyệt yêu cầu mượn';
   byId('management-recovery').replaceChildren();
+  byId('return-detail-link').hidden = true;
+  const lookup = byId('return-lookup');
+  lookup.hidden = !manager || !handedOver || detail;
+  lookup.reset();
+  message('return-lookup-error', '');
   message('management-feedback', '');
   if (!manager) return message('management-status', 'Bạn không có quyền truy cập.', true);
   if (detail && !(id > 0 && id <= 2147483647)) {
     return message('management-status', 'Đường dẫn yêu cầu không hợp lệ.', true);
   }
-  managementView = { id: detail ? id : null, approved, listRoute, items: [] };
+  managementView = { id: detail ? id : null, approved, handedOver, listRoute, items: [] };
   byId('management-refresh').hidden = false;
   void loadManagement(managementView);
 }
 
 function managementReadError(error) {
   if (error.status === 403) return 'Bạn không có quyền truy cập.';
-  if (error.status === 404) return 'Không tìm thấy yêu cầu. Hãy về danh sách và làm mới.';
+  if (error.status === 404) return 'Không tìm thấy yêu cầu. Hãy quay lại và kiểm tra mã yêu cầu.';
   if (error.status === 400) return 'Đường dẫn yêu cầu không hợp lệ.';
   return 'Chưa tải được dữ liệu. Hãy thử lại.';
 }
@@ -561,17 +579,23 @@ function managementSummary(item) {
   return formatClubTime(item.start_at) + ' → ' + formatClubTime(item.end_at);
 }
 
+function returnReceipt(item) {
+  if (item.status !== 'RETURNED' || !item.returned_at || !item.returned_by) return '';
+  return 'Người nhận: ' + (item.returned_by_username || 'ID ' + item.returned_by)
+    + ' · Giờ nhận: ' + formatClubTime(item.returned_at);
+}
+
 function renderManagement(view) {
   if (!view || view !== managementView) return;
   const currentDecision = managementDecisions.get(view.id);
-  byId('management-refresh').hidden = Boolean(currentDecision?.handover
+  byId('management-refresh').hidden = Boolean(currentDecision?.physicalTransition
     && (currentDecision.sending || currentDecision.running || currentDecision.retry || currentDecision.unavailable));
   const rows = byId('management-rows');
   const recovery = byId('management-recovery');
   const focused = document.activeElement;
   const focusKey = rows.contains(focused) || recovery.contains(focused) ? focused.dataset.focusKey : null;
   const items = view.items;
-  byId('management-list-title').textContent = (view.approved ? 'Đã duyệt' : 'Đang chờ') + ' (' + items.length + ')';
+  byId('management-list-title').textContent = managementListLabel(view) + ' (' + items.length + ')';
   if (view.id && items.length) byId('management-title').textContent = 'Yêu cầu #' + view.id;
   rows.replaceChildren(...items.map((item) => {
     const row = document.createElement('li');
@@ -593,6 +617,12 @@ function renderManagement(view) {
     badge.className = 'request-badge';
     badge.textContent = loanLabels[item.status] || item.status;
     info.append(badge);
+    const receipt = returnReceipt(item);
+    if (receipt) {
+      const line = document.createElement('p');
+      line.textContent = receipt;
+      info.append(line);
+    }
     const actions = document.createElement('div');
     actions.className = 'management-actions';
     const decision = managementDecisions.get(item.id);
@@ -610,7 +640,14 @@ function renderManagement(view) {
       button.disabled = Boolean(decision?.locked || managementBusy());
       actions.append(button);
     }
-    if (!view.approved && item.status === 'PENDING') {
+    if (view.handedOver && item.status === 'HANDED_OVER') {
+      const label = 'Xác nhận nhận lại';
+      const button = decisionButton(label, item.id + '-return', () => confirmDecision(item, 'return', label));
+      button.className = 'primary';
+      button.disabled = Boolean(decision?.locked || managementBusy());
+      actions.append(button);
+    }
+    if (!view.approved && !view.handedOver && item.status === 'PENDING') {
       for (const [verb, label, style] of [['approve', 'Duyệt', 'primary'], ['reject', 'Từ chối', 'reject']]) {
         const button = decisionButton(label, item.id + '-' + verb, () => confirmDecision(item, verb, label));
         button.className = style;
@@ -629,7 +666,9 @@ function renderManagement(view) {
   }));
   recovery.replaceChildren();
   for (const [id, decision] of managementDecisions) {
-    if (!decision.retry || (view.id && view.id !== id) || (decision.handover && (!view.id || !view.approved))) continue;
+    if (!decision.retry || (view.id && view.id !== id)
+      || (decision.handover && (!view.id || !view.approved))
+      || (decision.returning && !view.handedOver)) continue;
     const retry = decisionButton(decision.retryLabel + ' YC-' + id, id + '-retry', decision.retry);
     retry.disabled = managementBusy();
     recovery.append(retry);
@@ -645,8 +684,9 @@ function confirmDecision(item, verb, label) {
   if (loggingOut || managementBusy() || managementDecisions.get(item.id)?.locked) return;
   decisionSelection = { item, verb, user, view: managementView };
   decisionDialog.returnValue = '';
-  byId('decision-title').textContent = label + ' yêu cầu YC-' + item.id + '?';
-  byId('decision-confirm').textContent = 'Xác nhận ' + label.toLowerCase();
+  byId('decision-title').textContent = verb === 'return' ? 'Nhận lại thiết bị · YC-' + item.id + '?'
+    : label + ' yêu cầu YC-' + item.id + '?';
+  byId('decision-confirm').textContent = verb === 'return' ? label : 'Xác nhận ' + label.toLowerCase();
   byId('decision-summary').textContent = item.equipment_name + ' · ' + item.equipment_asset_code
     + ' · ' + managementSummary(item);
   decisionDialog.showModal();
@@ -664,27 +704,75 @@ byId('management-refresh').addEventListener('click', () => {
   void loadManagement(managementView);
 });
 
+const returnLookupInput = byId('return-lookup-id');
+byId('return-lookup').addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (user?.role !== 'MANAGER' || location.hash !== handedOverRoute || loggingOut) return;
+  const id = Number(/^(?:YC-)?(\d+)$/i.exec(returnLookupInput.value.trim())?.[1]);
+  if (!(id > 0 && id <= 2147483647)) {
+    message('return-lookup-error', 'Nhập mã yêu cầu hợp lệ, ví dụ YC-42.', true);
+    returnLookupInput.focus();
+    return;
+  }
+  message('return-lookup-error', '');
+  location.hash = handedOverRoute + '/' + id;
+});
+
 async function submitDecision({ item, verb, user: session }) {
   const id = item.id;
   if (session !== user || session?.role !== 'MANAGER' || loggingOut
     || managementBusy() || managementDecisions.get(id)?.locked) return;
   const path = '/loan-requests/' + id;
   const handover = verb === 'handover';
-  const decision = { locked: true, sending: true, handover };
+  const returning = verb === 'return';
+  const physicalTransition = handover || returning;
+  const decision = { locked: true, sending: true, handover, returning, physicalTransition };
   managementDecisions.set(id, decision);
   const feedback = (text, error = false) => {
     if (managementView) message('management-feedback', 'YC-' + id + ' · ' + text, error);
   };
-  if (handover) feedback('Đang xác nhận giao…');
+  if (returning) {
+    byId('return-detail-link').hidden = true;
+    feedback('Đang xác nhận nhận lại…');
+  } else if (handover) feedback('Đang xác nhận giao…');
   else decision.notice = 'Đang gửi quyết định…';
   const refreshView = () => {
     if (managementView) void loadManagement(managementView, false);
+  };
+  const applyPhysicalStatus = (fresh) => {
+    managementDecisions.delete(id);
+    const view = managementView;
+    const receipt = returning && returnReceipt(fresh);
+    let result = 'Trạng thái đã đọc: ' + (loanLabels[fresh.status] || fresh.status) + '.';
+    if (receipt) result = 'Đã trả. ' + receipt + '.';
+    if (handover && decision.sending) result = 'Đã xác nhận giao thiết bị.';
+    feedback(result);
+    if (view?.id === id) {
+      view.read?.abort();
+      view.items = [fresh];
+      byId('management-refresh').disabled = false;
+      byId('management-refresh').textContent = 'Làm mới';
+      message('management-status', '');
+    } else if (view && !view.id && (returning ? view.handedOver : view.approved)) {
+      if (returning && fresh.status === 'RETURNED') {
+        const link = byId('return-detail-link');
+        link.href = handedOverRoute + '/' + id;
+        link.textContent = 'Xem chi tiết YC-' + id;
+        link.hidden = false;
+      }
+      view.items = view.items.flatMap((entry) => {
+        if (entry.id !== id) return [entry];
+        return fresh.status === (returning ? 'HANDED_OVER' : 'APPROVED') ? [fresh] : [];
+      });
+      refreshView();
+    }
+    renderManagement(view);
   };
   const reconcile = async (refreshSession = false) => {
     if (user !== session || managementBusy()) return;
     decision.running = true;
     decision.retry = undefined;
-    if (handover) feedback('Đang tải lại trạng thái…');
+    if (physicalTransition) feedback(returning ? decision.notice + ' Đang tải lại chi tiết…' : 'Đang tải lại trạng thái…');
     renderManagement(managementView);
     try {
       if (refreshSession) {
@@ -697,19 +785,7 @@ async function submitDecision({ item, verb, user: session }) {
       let fresh = await api(path, { signal: AbortSignal.timeout(15000) });
       if (sessionVerification) await sessionVerification.promise;
       if (user !== session) return;
-      if (handover) {
-        managementDecisions.delete(id);
-        feedback('Trạng thái đã đọc: ' + (loanLabels[fresh.status] || fresh.status) + '.');
-        const view = managementView;
-        if (view?.id === id) {
-          view.read?.abort();
-          view.items = [fresh];
-          byId('management-refresh').disabled = false;
-          byId('management-refresh').textContent = 'Làm mới';
-          message('management-status', '');
-        } else if (view?.approved && !view.id) refreshView();
-        return;
-      }
+      if (physicalTransition) return applyPhysicalStatus(fresh);
       const queue = await api('/loan-requests', { signal: AbortSignal.timeout(15000) });
       if (sessionVerification) await sessionVerification.promise;
       if (user !== session) return;
@@ -725,7 +801,7 @@ async function submitDecision({ item, verb, user: session }) {
       }
       feedback(decision.notice + ' Trạng thái đã đọc: ' + (loanLabels[fresh.status] || fresh.status) + '.');
       const view = managementView;
-      if (view && ((!view.approved && !view.id) || view.id === id)) {
+      if (view && ((!view.approved && !view.handedOver && !view.id) || view.id === id)) {
         view.read?.abort();
         byId('management-refresh').disabled = false;
         byId('management-refresh').textContent = 'Làm mới';
@@ -736,7 +812,8 @@ async function submitDecision({ item, verb, user: session }) {
       if (sessionVerification) await sessionVerification.promise;
       if (user !== session) return;
       if (error.status === 401) return expired();
-      decision.retryLabel = refreshSession ? 'Làm mới phiên và tải lại' : 'Tải lại trạng thái';
+      decision.retryLabel = refreshSession ? 'Làm mới phiên và tải lại'
+        : returning ? 'Thử tải lại chi tiết' : 'Tải lại trạng thái';
       decision.retry = () => void reconcile(refreshSession);
       feedback(decision.notice + ' ' + managementReadError(error), true);
     } finally {
@@ -753,18 +830,11 @@ async function submitDecision({ item, verb, user: session }) {
     });
     if (sessionVerification) await sessionVerification.promise;
     if (user !== session) return;
+    if (physicalTransition) return applyPhysicalStatus({ ...item, ...saved });
     managementDecisions.delete(id);
-    feedback(handover ? 'Đã xác nhận giao thiết bị.' : (loanLabels[saved.status] || saved.status) + '.');
+    feedback((loanLabels[saved.status] || saved.status) + '.');
     if (managementView) {
       const view = managementView;
-      if (handover && view.id === id) {
-        view.read?.abort();
-        view.items = [{ ...item, ...saved }];
-        byId('management-refresh').disabled = false;
-        byId('management-refresh').textContent = 'Làm mới';
-        message('management-status', '');
-        return renderManagement(view);
-      }
       view.items = view.id
         ? view.items.map((entry) => entry.id === id ? { ...entry, status: saved.status } : entry)
         : view.items.filter((entry) => entry.id !== id);
@@ -775,7 +845,7 @@ async function submitDecision({ item, verb, user: session }) {
     if (user !== session) return;
     decision.sending = false;
     if (error.status === 401) return expired();
-    if (handover) {
+    if (physicalTransition) {
       const refreshSession = error.message === 'CSRF_INVALID';
       if (error.message === 'EQUIPMENT_IN_USE') {
         managementDecisions.delete(id);
@@ -790,12 +860,17 @@ async function submitDecision({ item, verb, user: session }) {
             byId('management-refresh').hidden = true;
             message('management-status', '');
           }
-        } else managementDecisions.delete(id);
+        } else {
+          managementDecisions.delete(id);
+          if (returning) refreshView();
+        }
         feedback(managementReadError(error), true);
       } else {
         decision.notice = refreshSession ? 'Không xác thực được thao tác. Hãy làm mới phiên.'
           : error.message === 'INVALID_TRANSITION' ? 'Yêu cầu đã đổi trạng thái. Hãy tải lại chi tiết.'
-            : 'Chưa xác định được kết quả. Hãy tải lại chi tiết trước khi giao lại.';
+            : returning ? 'Chưa xác định được kết quả.'
+              : 'Chưa xác định được kết quả. Hãy tải lại chi tiết trước khi giao lại.';
+        if (returning) return reconcile(refreshSession);
         decision.retryLabel = refreshSession ? 'Làm mới phiên và tải lại' : 'Tải lại chi tiết';
         decision.retry = () => void reconcile(refreshSession);
         feedback(decision.notice, true);

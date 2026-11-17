@@ -16,6 +16,7 @@
       <a href="#requests" id="requests-link" hidden>Yêu cầu của tôi</a>
       <a href="#management" id="management-link" hidden>Quản lý</a>
       <a href="#management/approved" id="approved-link" hidden>Yêu cầu đã duyệt</a>
+      <a href="#management/handed-over" id="handed-over-link" hidden>Yêu cầu đã giao</a>
       <button type="button" id="logout" hidden>Đăng xuất</button>
     </nav>
   </div></header>
@@ -149,6 +150,13 @@
         <p id="management-zone" class="muted">Giờ CLB · Asia/Bangkok (UTC+7)</p>
         <p><a id="management-back" href="#management" hidden>Về hàng đợi</a></p>
         <p id="management-feedback" role="status"></p>
+        <a id="return-detail-link" hidden>Xem chi tiết</a>
+        <form id="return-lookup" hidden>
+          <label for="return-lookup-id">Mã yêu cầu (ví dụ YC-42)</label>
+          <input id="return-lookup-id" required aria-describedby="return-lookup-error">
+          <button type="submit">Tra cứu chi tiết</button>
+          <p id="return-lookup-error" role="status"></p>
+        </form>
         <div class="management-actions">
           <h2 id="management-list-title" hidden>Đang chờ</h2>
           <button id="management-refresh" type="button" hidden>Làm mới</button>

@@ -32,10 +32,10 @@ export function sqlServerStore(pool, sql, schema) {
   const { users, sessions, equipment, loan_requests, loan_events } = tables(schema);
   const loanFields = ['id', 'equipment_id', 'start_at', 'end_at', 'created_at', 'status'];
   const loanColumns = loanFields.join(', ');
-  const managedLoans = `SELECT ${loanFields.map(field => 'r.' + field).join(', ')}, r.borrower_id,
+  const managedLoanFields = `${loanFields.map(field => 'r.' + field).join(', ')}, r.borrower_id,
                                e.asset_code AS equipment_asset_code, e.name AS equipment_name,
-                               u.username AS borrower_username
-                        FROM ${loan_requests} AS r
+                               u.username AS borrower_username`;
+  const managedLoans = `FROM ${loan_requests} AS r
                         JOIN ${equipment} AS e ON e.id = r.equipment_id
                         JOIN ${users} AS u ON u.id = r.borrower_id`;
   return {
@@ -92,14 +92,28 @@ export function sqlServerStore(pool, sql, schema) {
       return result.recordset[0];
     },
     async listManagedLoanRequests(status) {
-      const result = await pool.request().input('status', sql.VarChar(16), status).query(`${managedLoans}
+      const result = await pool.request().input('status', sql.VarChar(16), status).query(`
+        SELECT ${managedLoanFields} ${managedLoans}
         WHERE r.status = @status ORDER BY r.created_at, r.id`);
       return result.recordset;
     },
     async readManagedLoanRequest(requestId) {
       const result = await pool.request().input('request_id', sql.Int, requestId)
-        .query(`${managedLoans} WHERE r.id = @request_id`);
-      return result.recordset[0];
+        .query(`SELECT ${managedLoanFields}, returned.actor_id AS returned_by,
+                       returned.occurred_at AS returned_at, receiver.username AS returned_by_username
+                ${managedLoans}
+                OUTER APPLY (
+                  SELECT TOP (1) actor_id, occurred_at FROM ${loan_events}
+                  WHERE r.status = 'RETURNED' AND request_id = r.id
+                    AND from_status = 'HANDED_OVER' AND to_status = 'RETURNED'
+                  ORDER BY id DESC
+                ) AS returned
+                LEFT JOIN ${users} AS receiver ON receiver.id = returned.actor_id
+                WHERE r.id = @request_id`);
+      const loan = result.recordset[0];
+      if (!loan) return;
+      const { returned_by, returned_at, returned_by_username, ...fields } = loan;
+      return returned_by === null ? fields : loan;
     },
     async decideLoanRequest(requestId, actorId, target) {
       try {
@@ -113,7 +127,11 @@ export function sqlServerStore(pool, sql, schema) {
               BEGIN TRANSACTION;
               DECLARE @equipment_id int, @locked_equipment_id int;
               DECLARE @status varchar(16), @start_at datetime2(3), @end_at datetime2(3);
-              DECLARE @source varchar(16) = CASE WHEN @target = 'HANDED_OVER' THEN 'APPROVED' ELSE 'PENDING' END;
+              DECLARE @source varchar(16) = CASE @target
+                WHEN 'HANDED_OVER' THEN 'APPROVED'
+                WHEN 'RETURNED' THEN 'HANDED_OVER'
+                ELSE 'PENDING'
+              END;
               DECLARE @updated TABLE (
                 id int, equipment_id int, start_at datetime2(3), end_at datetime2(3),
                 created_at datetime2(3), status varchar(16), borrower_id int
@@ -165,7 +183,10 @@ export function sqlServerStore(pool, sql, schema) {
               VALUES (@request_id, @actor_id, @status, @target, @now);
 
               COMMIT TRANSACTION;
-              SELECT ${loanColumns}, borrower_id FROM @updated;
+              IF @target = 'RETURNED'
+                SELECT ${loanColumns}, borrower_id, @actor_id AS returned_by, @now AS returned_at FROM @updated;
+              ELSE
+                SELECT ${loanColumns}, borrower_id FROM @updated;
             END TRY
             BEGIN CATCH
               IF XACT_STATE() <> 0 ROLLBACK TRANSACTION;

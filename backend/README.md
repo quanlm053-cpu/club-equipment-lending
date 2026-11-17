@@ -87,3 +87,11 @@ Dùng database riêng `ClubEquipmentLending_Test` và tài khoản Windows có q
 - Quản lý gọi `POST /loan-requests/{id}/handover` với cookie phiên, header `X-CSRF-Token` và body rỗng. Phản hồi `200` có cùng các trường với lệnh duyệt #114 và `status: "HANDED_OVER"`. Hiển thị **Đã giao** và làm mới danh sách đã duyệt. Người giao và thời điểm UTC lưu trong nhật ký nội bộ.
 - Với `409 EQUIPMENT_IN_USE`, giữ **Đã duyệt** và hiển thị **Thiết bị vẫn đang được giữ. Hãy xác nhận nhận lại trước khi giao lượt này.** Với `409 INVALID_TRANSITION`, tải lại chi tiết để lấy trạng thái hiện tại. Nếu mất phản hồi hoặc gặp `500 INTERNAL_ERROR`, tải lại chi tiết trước khi cho phép gửi lại.
 - Các lỗi còn lại gồm `400 INVALID_REQUEST` cho ID giao sai định dạng, `404 NOT_FOUND`, `401 AUTH_REQUIRED` và `403 FORBIDDEN` hoặc `CSRF_INVALID`.
+
+## Bàn giao FE · Xác nhận nhận lại thiết bị (#116)
+
+- Quản lý lấy danh sách bằng `GET /loan-requests?status=HANDED_OVER` và xác nhận bằng `POST /loan-requests/{id}/return` với cookie phiên, header `X-CSRF-Token` và body rỗng. Dùng đường dẫn cùng origin.
+- Phản hồi `200` sau commit có DTO lệnh giao với `status: "RETURNED"` và thêm `returned_by` (ID), `returned_by_username` (tên đăng nhập), `returned_at` (ISO 8601 UTC). Hiển thị **Đã trả**, tên người nhận và giờ theo `Asia/Bangkok`, rồi tải lại danh sách đã giao. Chi tiết quản lý `GET /loan-requests/{id}` đọc cùng dữ liệu nhận từ nhật ký. Với bản ghi cũ đã trả mà thiếu sự kiện, các trường nhận vắng mặt.
+- Thành viên tải lại danh sách hoặc chi tiết hiện có để thấy `RETURNED` và giờ đặt gốc. Tra cứu lịch mới bỏ khoảng đặt đã trả. Tiếp tục dùng lệnh giao #115 để kiểm tra thiết bị đang rảnh và giao lượt kế tiếp.
+- Với `409 INVALID_TRANSITION`, `500 INTERNAL_ERROR` hoặc mất phản hồi, tải lại chi tiết trước khi cho gửi lại. Nếu đã trả, hiển thị kết quả đã lưu. Nếu còn đã giao, cho xác nhận lại. Nếu tải chi tiết lỗi, cho thử tải lại chi tiết. Lỗi khác gồm `400 INVALID_INPUT`, `404 NOT_FOUND`, `401 AUTH_REQUIRED` và `403 FORBIDDEN` hoặc `CSRF_INVALID`.
+- Backend dùng schema từ migration 002, 004 và 005 để ghi sự kiện và giải phóng thiết bị trong cùng giao dịch.

@@ -11,17 +11,21 @@ const pending = { id: 42, status: 'PENDING' };
 function setup() {
   const nodes = new Map();
   const requests = [];
+  const windowListeners = {};
   function element() {
     return {
       children: [],
       dataset: {},
-      addEventListener() {},
+      listeners: {},
+      addEventListener(type, listener) { this.listeners[type] = listener; },
+      click() { if (!this.disabled) this.listeners.click?.(); },
       append(...children) { this.children.push(...children); },
       close() {},
       contains() { return false; },
       focus() {},
       replaceChildren(...children) { this.children = children; },
       reset() {},
+      showModal() { this.open = true; },
       removeAttribute() {},
       setAttribute() {},
       classList: { toggle() {} },
@@ -30,6 +34,11 @@ function setup() {
   const app = runInNewContext(source + `
     user = initialSession;
     ({ checkSession, logout, submitDecision, managementBusy, managementDecisions, getUser: () => user,
+      openManagement(hash, role = 'MANAGER') {
+        user.role = role;
+        location.hash = hash;
+        showManagement();
+      },
       showApprovedDetail(item) {
         managementView = { id: item.id, approved: true, items: [item] };
         renderManagement(managementView);
@@ -44,7 +53,7 @@ function setup() {
       },
       querySelectorAll: () => [],
     },
-    window: { addEventListener() {} },
+    window: { addEventListener(type, listener) { windowListeners[type] = listener; } },
     location: { hash: '#equipment' },
     history: { replaceState() {} },
     AbortController,
@@ -52,13 +61,14 @@ function setup() {
     fetch(path, options) {
       if (path === '/equipment') return Promise.resolve(Response.json([]));
       const { promise, resolve, reject } = Promise.withResolvers();
-      requests.push({ path, method: options.method ?? 'GET', resolve, reject });
+      requests.push({ path, method: options.method ?? 'GET', headers: options.headers, resolve, reject });
       return promise;
     },
   });
   return {
     ...app,
     nodes,
+    navigate: () => windowListeners.hashchange(),
     take(path, method = 'GET') {
       const request = requests.shift();
       assert.equal(request?.path, path);
@@ -70,6 +80,140 @@ function setup() {
 }
 
 const flush = () => new Promise(setImmediate);
+
+const handedOver = {
+  id: 42,
+  status: 'HANDED_OVER',
+  equipment_name: 'Máy chiếu demo',
+  equipment_asset_code: 'DEMO-01',
+  borrower_username: 'demo-member',
+  start_at: '2026-11-17T09:00:00Z',
+  end_at: '2026-11-17T10:00:00Z',
+  created_at: '2026-11-17T08:00:00Z',
+};
+const returned = {
+  ...handedOver,
+  status: 'RETURNED',
+  returned_by: 1,
+  returned_by_username: 'demo-manager',
+  returned_at: '2026-11-17T09:30:00Z',
+};
+const handedOverPath = '/loan-requests?status=HANDED_OVER';
+const returnAction = (app) => app.nodes.get('management-rows').children[0].children[1].children.at(-1);
+
+test('a fresh manager page can look up a returned request by code from the empty handed-over list', async () => {
+  const app = setup();
+  app.openManagement('#management/handed-over');
+  app.take(handedOverPath).resolve(Response.json([]));
+  await flush();
+  const lookup = app.nodes.get('return-lookup');
+  const input = app.nodes.get('return-lookup-id');
+  const submit = () => lookup.listeners.submit({ preventDefault() {} });
+  assert.equal(lookup.hidden, false);
+  assert.equal(app.nodes.get('return-detail-link').hidden, true);
+  input.value = 'YC-2147483648';
+  submit();
+  assert.match(app.nodes.get('return-lookup-error').textContent, /hợp lệ/);
+  assert.equal(app.requests.length, 0);
+  input.value = ' yc-42 ';
+  submit();
+  app.navigate();
+  assert.equal(lookup.hidden, true);
+  assert.match(app.nodes.get('management-status').textContent, /Đang tải chi tiết/);
+  app.take('/loan-requests/42').resolve(Response.json(returned));
+  await flush();
+  const [info, actions] = app.nodes.get('management-rows').children[0].children;
+  assert.match(info.children.at(-1).textContent, /demo-manager.*16:30/);
+  assert.equal(actions.children.length, 0);
+});
+
+async function loadHandedOver(app, suffix = '') {
+  app.openManagement('#management/handed-over' + suffix);
+  app.take(suffix ? '/loan-requests' + suffix : handedOverPath)
+    .resolve(Response.json(suffix ? handedOver : [handedOver]));
+  await flush();
+}
+
+test('return confirmation sends one CSRF-protected POST and keeps the receipt if list reload fails', async () => {
+  const app = setup();
+  await loadHandedOver(app);
+  returnAction(app).click();
+  const dialog = app.nodes.get('decision-dialog');
+  assert.equal(dialog.open, true);
+  assert.match(app.nodes.get('decision-title').textContent, /YC-42/);
+  assert.match(app.nodes.get('decision-summary').textContent, /Máy chiếu demo/);
+  dialog.returnValue = 'cancel';
+  dialog.listeners.close();
+  assert.equal(app.requests.length, 0);
+  returnAction(app).click();
+  dialog.returnValue = 'confirm';
+  dialog.listeners.close();
+  assert.equal(returnAction(app).disabled, true);
+  returnAction(app).click();
+  const post = app.take('/loan-requests/42/return', 'POST');
+  assert.equal(post.headers['X-CSRF-Token'], manager.csrf_token);
+  assert.equal(app.requests.length, 0);
+  post.resolve(Response.json(returned));
+  await flush();
+  app.take(handedOverPath).reject(new TypeError('demo network error'));
+  await flush();
+  assert.match(app.nodes.get('management-feedback').textContent, /Đã trả.*demo-manager.*16:30/);
+  assert.equal(app.nodes.get('return-detail-link').href, '#management/handed-over/42');
+  assert.equal(app.nodes.get('management-refresh').textContent, 'Thử tải lại');
+  assert.equal(app.nodes.get('management-rows').children.length, 0);
+  app.nodes.get('management-refresh').click();
+  app.take(handedOverPath).resolve(Response.json([]));
+  await flush();
+  assert.equal(app.nodes.get('management-status').textContent, 'Chưa có yêu cầu đã giao.');
+});
+
+for (const failure of ['network', 'conflict']) {
+  test(`return reconciles ${failure} with detail and displays the saved receipt`, async () => {
+    const app = setup();
+    await loadHandedOver(app, '/42');
+    const submitting = app.submitDecision({ item: handedOver, verb: 'return', user: app.getUser() });
+    const post = app.take('/loan-requests/42/return', 'POST');
+    if (failure === 'network') post.reject(new TypeError('demo network error'));
+    else post.resolve(Response.json({ code: 'INVALID_TRANSITION' }, { status: 409 }));
+    await flush();
+    app.take('/loan-requests/42').reject(new TypeError('demo read error'));
+    await submitting;
+    assert.equal(returnAction(app).disabled, true);
+    const [retry] = app.nodes.get('management-recovery').children;
+    assert.match(retry.textContent, /Thử tải lại chi tiết/);
+    retry.click();
+    app.take('/loan-requests/42').resolve(Response.json(returned));
+    await flush();
+    const [info, actions] = app.nodes.get('management-rows').children[0].children;
+    assert.match(info.children.at(-1).textContent, /demo-manager.*16:30/);
+    assert.equal(actions.children.length, 0);
+    assert.equal(app.requests.length, 0);
+  });
+}
+
+test('return can be confirmed again after reading an unchanged status with a refreshed CSRF token', async () => {
+  const app = setup();
+  await loadHandedOver(app, '/42');
+  const submitting = app.submitDecision({ item: handedOver, verb: 'return', user: app.getUser() });
+  app.take('/loan-requests/42/return', 'POST').resolve(Response.json({ code: 'CSRF_INVALID' }, { status: 403 }));
+  await flush();
+  app.take('/auth/me').resolve(Response.json({ ...manager, csrf_token: 'refreshed-token' }));
+  await flush();
+  app.take('/loan-requests/42').resolve(Response.json(handedOver));
+  await submitting;
+  assert.equal(returnAction(app).disabled, false);
+  assert.equal(app.getUser().csrf_token, 'refreshed-token');
+});
+
+test('member cannot open a management return route', () => {
+  const app = setup();
+  app.openManagement('#management/handed-over', 'MEMBER');
+  assert.equal(app.nodes.get('return-lookup').hidden, true);
+  app.openManagement('#management/handed-over/42', 'MEMBER');
+  assert.equal(app.nodes.get('handed-over-link').hidden, true);
+  assert.equal(app.nodes.get('management-status').textContent, 'Bạn không có quyền truy cập.');
+  assert.equal(app.requests.length, 0);
+});
 
 test('handover preserves the rendered detail when POST returns only loan fields', async () => {
   const item = {

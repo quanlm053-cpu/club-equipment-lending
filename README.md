@@ -12,7 +12,7 @@ npm test
 npm run build
 ```
 
-`npm test` kiểm tra API HTTP bằng dữ liệu tổng hợp, gồm phiên, phân quyền, tra cứu lịch, gửi và theo dõi yêu cầu mượn, hàng đợi quản lý, duyệt, từ chối và xác nhận giao. Lệnh này cũng chạy kiểm thử hồi quy quản lý phiên của frontend với API mô phỏng. `npm run build` kiểm tra cú pháp JavaScript của ứng dụng và chép giao diện vào `dist/`. Workflow `lending-validation` chạy ba lệnh trên cho pull request với Node.js 26.
+`npm test` kiểm tra API HTTP bằng dữ liệu tổng hợp, gồm phiên, phân quyền, tra cứu lịch, gửi và theo dõi yêu cầu mượn, hàng đợi quản lý, duyệt, từ chối, xác nhận giao và xác nhận nhận lại. Lệnh này cũng chạy kiểm thử frontend về quản lý phiên và xác nhận nhận lại với API mô phỏng. `npm run build` kiểm tra cú pháp JavaScript của ứng dụng và chép giao diện vào `dist/`. Workflow `lending-validation` chạy ba lệnh trên cho pull request với Node.js 26.
 
 ## Chạy bản demo
 
@@ -39,12 +39,15 @@ npm run build
 7. Thực hiện [kịch bản Story #114](frontend/README.md#chạy-thử-story-114) sau khi migration đã áp dụng `004-loan-events.sql`. Dùng hai cửa sổ có phiên độc lập để kiểm tra đồng thời. Xác nhận yêu cầu trùng giờ bị xung đột vẫn nằm trong hàng đợi và có thể được từ chối. Duyệt tiếp yêu cầu sát biên trên cùng thiết bị và yêu cầu cùng giờ trên thiết bị khác.
 8. Thực hiện [kịch bản Story #115](frontend/README.md#chạy-thử-story-115) sau khi migration đã áp dụng `005-loan-request-active-holder.sql`. Duyệt hai yêu cầu sát biên cho cùng thiết bị, rồi giao lượt đầu từ **Yêu cầu đã duyệt**. Khi thử giao lượt kế tiếp, kiểm tra phản hồi `409 EQUIPMENT_IN_USE` trong tab Network và xác nhận lượt này vẫn **Đã duyệt**. Tải lại danh sách và chi tiết trong phiên thành viên để thấy lượt đầu **Đã giao**.
 
+9. Tiếp tục với hai lượt ở bước 8 theo [kịch bản Story #116](frontend/README.md#chạy-thử-story-116). Trong phiên quản lý, mở **Yêu cầu đã giao**, xác nhận nhận lại lượt đầu và mở chi tiết để kiểm tra **Đã trả**, người nhận và thời điểm nhận theo giờ CLB. Trong phiên thành viên, tải lại yêu cầu để kiểm tra **Đã trả** cùng giờ đặt gốc. Tra lịch qua cả hai khoảng đặt để kiểm tra khoảng đầu đã trống và lượt kế tiếp vẫn giữ chỗ, rồi giao lượt kế tiếp từ phiên quản lý. Migration hiện có đã hỗ trợ quy trình nhận lại.
+
 ## Kiểm thử với SQL Server
 
 Đặt `TEST_DATABASE_URL` trỏ tới database riêng `ClubEquipmentLending_Test` với quyền tạo và xóa schema thử nghiệm. Nếu dùng ODBC, đặt `SQLSERVER_DRIVER=odbc`. Chạy `npm run test:sqlserver` từ thư mục gốc để kiểm tra migration, seed lặp lại, hai ID thiết bị, vòng đời phiên và lịch trống với dữ liệu tổng hợp cho từng trạng thái yêu cầu. Bài kiểm thử cũng gửi đồng thời hai yêu cầu trùng giờ, xác nhận cả hai được lưu với mã riêng ở trạng thái `PENDING` và kiểm tra truy cập từ thành viên khác. Bộ kiểm thử tự tạo và dọn fixture trong schema riêng. Dùng dữ liệu tổng hợp cho cả database demo và test.
 
 ## Xác minh SQL Server trên máy điều hành
 
+- Story #116 đạt 2/2 theo log `1794934432913076600-story-116-sqlserver.log` của bộ điều phối. Các ca kiểm tra gồm xác nhận nhận lại đồng thời, hoàn tác khi ghi sự kiện lỗi, người nhận và thời điểm nhận, trạng thái thành viên, giải phóng lịch và giao lượt kế tiếp.
 - Story #115 đạt 2/2 theo log `1794917357493976400-story-115-sqlserver.log` của bộ điều phối. Bộ kiểm thử xác nhận giao đồng thời trên cùng thiết bị, trạng thái của lượt bị chặn và lượt đã giao khi thành viên đọc lại, người giao và thời điểm giao, cùng việc hoàn tác khi không ghi được sự kiện.
 - Story #114 đạt 2/2 trên cùng checkout theo log `1794915959443558300-story-114-sqlserver.log` của bộ điều phối. Bài kiểm thử qua HTTP xác nhận đúng một lượt duyệt thành công khi chồng giờ trên cùng thiết bị, lượt còn lại nhận `409 SCHEDULE_CONFLICT` và giữ `PENDING`. Các ca sát biên, khác thiết bị và hoàn tác khi ghi sự kiện lỗi đều đạt.
 - Story #112 đạt 1/1 trên cùng checkout theo log `1794747700991673500-story-112-sqlserver.log` của bộ điều phối.
