@@ -2,11 +2,24 @@
 
 1. Dùng cơ sở dữ liệu SQL Server dành cho demo/test. Chạy migration và seed theo [hướng dẫn backend](../backend/README.md), đặt hai mật khẩu tổng hợp qua `DEMO_MEMBER_PASSWORD` và `DEMO_MANAGER_PASSWORD`.
 2. Khởi động API với `APP_ORIGIN=https://localhost:8443` và cổng mặc định `3000`.
-3. Từ thư mục gốc dự án chạy `npm run build`, sau đó chạy `caddy run --config Caddyfile`. [Caddyfile](../Caddyfile) phục vụ bản build trong `dist` và chuyển tiếp các API phiên, danh mục và lịch trên cùng origin HTTPS.
+3. Từ thư mục gốc dự án chạy `npm run build`, sau đó chạy `caddy run --config Caddyfile`. Caddy phục vụ bản build trong `dist` và chuyển tiếp các API phiên, danh mục, lịch và yêu cầu mượn trên cùng origin HTTPS. [Caddyfile](../Caddyfile)
 
    Dùng chứng chỉ mà trình duyệt tin cậy. Với Caddy cục bộ, có thể dùng `caddy trust` để cài CA nội bộ khi tài khoản có quyền. Truy cập `https://localhost:8443/`.
 
-## Kiểm tra
+## Chạy thử Story #113
+
+1. Đăng nhập bằng `demo.member`. Mở **Yêu cầu của tôi** (`/#requests`) rồi chọn **Gửi yêu cầu** (`/#request/new`). Cũng có thể chọn **Gửi yêu cầu** ngay dưới một khung giờ trống. Liên kết từ lịch dùng các tham số `equipment_id`, `start_at`, `end_at` với hai mốc UTC từ API lịch. Biểu mẫu hiển thị và cho chỉnh lại theo giờ CLB (UTC+7).
+2. Chọn thiết bị mẫu, đặt giờ bắt đầu 09:00 và giờ kết thúc 09:00 cùng ngày. Kiểm tra lỗi cạnh ô kết thúc. Đổi giờ kết thúc thành 10:00 rồi gửi. Kiểm tra chi tiết hiện thông báo **Đã gửi yêu cầu** và nhãn **Chờ duyệt**. Gửi lại cùng thiết bị và khoảng giờ, rồi kiểm tra danh sách có hai mã riêng cùng chờ duyệt.
+3. Mở một chi tiết từ danh sách rồi tải lại để đọc trạng thái hiện tại. Dùng phiên của một thành viên demo khác mở thẳng mã đó và một mã hợp lệ chưa tồn tại. Cả hai cùng hiện **Không tìm thấy yêu cầu**. Với `demo.manager`, mở thẳng `/#requests` hoặc `/#request/new` để thấy thông báo thiếu quyền.
+4. Chặn lượt đọc `GET /loan-requests` hoặc `GET /loan-requests/{id}` trong công cụ mạng rồi thử lại sau khi bỏ chặn. Nếu lượt gửi trả lỗi máy chủ hoặc mất phản hồi, kiểm tra dữ liệu vẫn còn trên biểu mẫu và có thể về danh sách để đối chiếu kết quả.
+
+### Kết quả Task #145
+
+- Chrome headless qua loopback đã chạy giao diện với API backend và dữ liệu tổng hợp trong bộ nhớ. Kịch bản đạt các bước kiểm tra tải, rỗng, thử lại, điền từ lịch và quy đổi UTC với múi giờ trình duyệt America/Los_Angeles, chặn giờ bằng nhau, khóa biểu mẫu khi gửi, hai lượt trùng giờ, tải lại năm trạng thái, quyền sở hữu, hết phiên, thiếu quyền, CSRF sai, thiết bị mất và lỗi máy chủ sau khi ghi.
+- `npm run build`, `npm test` (3/3) và `git diff --check` đạt.
+- Dùng kết quả SQL Server do bộ điều phối cung cấp, đạt 1/1 theo log `1794913709051626400-story-113-sqlserver.log`. Lượt Chrome chạy trực tiếp với API qua loopback. Có thể chạy thử bản HTTPS qua Caddy theo các bước ở đầu tài liệu.
+
+## Kiểm tra phiên và danh mục
 
 - Mở trực tiếp `/#equipment` và `/#management` trong cửa sổ riêng tư. Cả hai đưa khách về đăng nhập.
 - Dùng nút điền tên `demo.member` rồi nhập mật khẩu đã seed. Thử mật khẩu sai trước. Đăng nhập đúng sẽ hiển thị hai máy chiếu với mã `DEMO-01` và `DEMO-02`. Mở `/#management` để kiểm tra thông báo thiếu quyền và liên kết về danh mục.

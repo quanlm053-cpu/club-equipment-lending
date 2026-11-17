@@ -1,5 +1,6 @@
 const byId = (id) => document.getElementById(id);
-const screens = ['session', 'login', 'equipment', 'availability', 'management'];
+const screens = ['session', 'login', 'equipment', 'availability', 'management',
+  'requests', 'request-new', 'request-detail'];
 const device = byId('device');
 const fromInput = byId('from');
 const toInput = byId('to');
@@ -19,6 +20,8 @@ let catalogRequest;
 let availabilityRequest;
 let checkingSession = false;
 let loggingOut = false;
+let loanView;
+let loanLoginRoute;
 
 class ApiError extends Error {
   constructor(response, code) {
@@ -43,6 +46,14 @@ function message(id, text, error = false) {
 }
 
 function show(screen) {
+  loanView?.abort();
+  byId('request-rows').replaceChildren();
+  byId('request-data').hidden = true;
+  for (const id of ['detail-device', 'detail-created', 'detail-start', 'detail-end', 'request-badge']) {
+    byId(id).textContent = '';
+  }
+  byId('request-form').reset();
+  byId('request-device').replaceChildren();
   catalogRequest?.abort();
   clearAvailability();
   byId('lookup').reset();
@@ -58,7 +69,8 @@ function show(screen) {
   byId('logout').hidden = !user;
   byId('equipment-link').hidden = !user;
   byId('management-link').hidden = !manager;
-  for (const id of ['equipment', 'management']) {
+  byId('requests-link').hidden = user?.role !== 'MEMBER';
+  for (const id of ['equipment', 'management', 'requests']) {
     const link = byId(id + '-link');
     if (id === screen || (id === 'equipment' && screen === 'availability')) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
@@ -192,7 +204,13 @@ async function lookupAvailability(event) {
     if (request.signal.aborted) return;
     const rows = available.map(({ start_at, end_at }) => {
       const row = document.createElement('li');
-      row.textContent = formatClubTime(start_at) + ' → ' + formatClubTime(end_at);
+      row.append(formatClubTime(start_at) + ' → ' + formatClubTime(end_at));
+      if (user.role === 'MEMBER') {
+        const link = document.createElement('a');
+        link.href = '#request/new?' + new URLSearchParams({ equipment_id: selected.value, start_at, end_at });
+        link.textContent = 'Gửi yêu cầu';
+        row.append(link);
+      }
       return row;
     });
     const updated = formatClubTime(as_of);
@@ -220,7 +238,224 @@ async function lookupAvailability(event) {
   }
 }
 
+const loanLabels = {
+  PENDING: 'Chờ duyệt',
+  APPROVED: 'Đã duyệt',
+  REJECTED: 'Đã từ chối',
+  HANDED_OVER: 'Đã giao',
+  RETURNED: 'Đã trả',
+};
+const loanDevice = byId('request-device');
+const loanStart = byId('request-start');
+const loanEnd = byId('request-end');
+
+function showLoanScreen(confirmedId) {
+  const [path, query] = location.hash.split('?');
+  const screen = path === '#requests' ? 'requests' : path === '#request/new' ? 'request-new' : 'request-detail';
+  show(screen);
+  const view = new AbortController();
+  loanView = view;
+  const member = user.role === 'MEMBER';
+  byId('new-request-link').hidden = !member;
+  byId('request-badge').hidden = true;
+  byId('request-detail-title').textContent = 'Chi tiết yêu cầu';
+  byId('request-form').hidden = true;
+  byId('request-catalog-retry').hidden = true;
+  for (const retry of document.querySelectorAll('[data-request-retry]')) retry.hidden = true;
+  const confirmation = byId('request-confirmation');
+  confirmation.hidden = true;
+  message('request-confirmation', '');
+  const statusId = screen === 'request-new' ? 'request-catalog-status' : screen + '-status';
+  message(statusId, '');
+  if (!member) return message(statusId, 'Bạn không có quyền truy cập.', true);
+
+  if (screen === 'request-new') {
+    const params = new URLSearchParams(query);
+    for (const [field, key] of [[loanStart, 'start_at'], [loanEnd, 'end_at']]) {
+      const utc = params.get(key);
+      if (utc && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(utc)) {
+        const clubLocal = new Date(Date.parse(utc) + 7 * 60 * 60 * 1000);
+        if (clubLocal.getUTCFullYear() >= 1 && clubLocal.getUTCFullYear() <= 9999) {
+          field.value = clubLocal.toISOString().slice(0, -1);
+        }
+      }
+    }
+    for (const field of [loanDevice, loanStart, loanEnd]) fieldError(field);
+    message('request-submit-status', '');
+    byId('request-form').hidden = false;
+    void loadLoanCatalog(view, params.get('equipment_id') || '');
+    return;
+  }
+
+  const id = /^#request\/(\d+)$/.exec(path)?.[1];
+  if (screen === 'request-detail' && !(Number(id) > 0 && Number(id) <= 2147483647)) {
+    return message(statusId, 'Không tìm thấy yêu cầu.', true);
+  }
+  if (confirmedId === Number(id)) {
+    confirmation.hidden = false;
+    message('request-confirmation', 'Đã gửi yêu cầu.');
+  }
+  const retry = byId(screen).querySelector('[data-request-retry]');
+  retry.onclick = () => {
+    byId(screen + '-title').focus();
+    void loadLoans(view, screen, id);
+  };
+  void loadLoans(view, screen, id);
+}
+
+async function loadLoans(view, screen, id) {
+  const statusId = screen + '-status';
+  const { signal } = view;
+  const retry = byId(screen).querySelector('[data-request-retry]');
+  retry.hidden = true;
+  message(statusId, 'Đang tải yêu cầu…');
+  try {
+    const result = await api(id ? '/loan-requests/' + Number(id) : '/loan-requests', { signal });
+    if (signal.aborted) return;
+    if (!id && result.length === 0) return message(statusId, 'Bạn chưa có yêu cầu nào.');
+    const catalog = await api('/equipment', { signal }).catch(error => {
+      if (error.status === 401) throw error;
+      return [];
+    });
+    if (signal.aborted) return;
+    const names = new Map(catalog.map(({ id, name, asset_code }) => [id, name + ' · ' + asset_code]));
+    const deviceName = item => names.get(item.equipment_id) || 'Thiết bị #' + item.equipment_id;
+    if (id) {
+      byId('request-detail-title').textContent = 'Yêu cầu #' + result.id;
+      const badge = byId('request-badge');
+      badge.textContent = loanLabels[result.status];
+      badge.hidden = false;
+      message('detail-device', deviceName(result));
+      message('detail-created', formatClubTime(result.created_at));
+      message('detail-start', formatClubTime(result.start_at));
+      message('detail-end', formatClubTime(result.end_at));
+      byId('request-data').hidden = false;
+      return message(statusId, '');
+    }
+    const rows = result.map(item => {
+      const row = document.createElement('li');
+      row.className = 'asset';
+      const cell = document.createElement('div');
+      const link = document.createElement('a');
+      link.href = '#request/' + item.id;
+      link.textContent = '#' + item.id + ' · ' + deviceName(item);
+      const times = document.createElement('div');
+      times.className = 'muted';
+      times.textContent = formatClubTime(item.start_at) + ' – ' + formatClubTime(item.end_at);
+      cell.append(link, times);
+      const badge = document.createElement('span');
+      badge.className = 'request-badge';
+      badge.textContent = loanLabels[item.status];
+      row.append(cell, badge);
+      return row;
+    });
+    byId('request-rows').replaceChildren(...rows);
+    message(statusId, '');
+  } catch (error) {
+    if (signal.aborted) return;
+    if (error.status === 401) return expired();
+    if (error.status === 403) return message(statusId, 'Bạn không có quyền truy cập.', true);
+    if (id && error.status === 404) return message(statusId, 'Không tìm thấy yêu cầu.', true);
+    message(statusId, 'Không tải được yêu cầu. Hãy thử lại.', true);
+    retry.hidden = false;
+  }
+}
+
+async function loadLoanCatalog(view, selectedId, missing = false) {
+  const fields = byId('request-fields');
+  const retry = byId('request-catalog-retry');
+  const statusId = 'request-catalog-status';
+  fields.disabled = true;
+  retry.hidden = true;
+  message(statusId, 'Đang tải danh mục…');
+  try {
+    const catalog = await api('/equipment', { signal: view.signal });
+    if (view.signal.aborted) return;
+    const placeholder = new Option('Chọn thiết bị', '');
+    placeholder.disabled = true;
+    loanDevice.replaceChildren(placeholder,
+      ...catalog.map(({ id, name, asset_code }) => new Option(name + ' · ' + asset_code, id)));
+    const available = catalog.some(item => String(item.id) === selectedId);
+    loanDevice.value = available ? selectedId : '';
+    fields.disabled = catalog.length === 0;
+    message(statusId, catalog.length ? '' : 'Chưa có thiết bị để chọn.');
+    if (missing || (selectedId && !available)) {
+      fieldError(loanDevice, 'Thiết bị không còn khả dụng. Hãy chọn lại.');
+      if (!fields.disabled) loanDevice.focus();
+    }
+  } catch (error) {
+    if (view.signal.aborted) return;
+    if (error.status === 401) return expired();
+    if (error.status === 403) return message(statusId, 'Bạn không có quyền truy cập.', true);
+    message(statusId, 'Không tải được danh mục. Hãy thử lại.', true);
+    retry.hidden = false;
+  }
+}
+
+function loanInstant(input) {
+  const value = input.value;
+  if (!input.validity.valid || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?$/.test(value)) return;
+  const instant = new Date(value + clubOffset);
+  if (instant.getUTCFullYear() >= 1 && instant.getUTCFullYear() <= 9999) return instant;
+}
+
+async function submitLoan(event) {
+  event.preventDefault();
+  const fields = byId('request-fields');
+  if (fields.disabled || loggingOut || byId('request-new').hidden || user?.role !== 'MEMBER') return;
+  const statusId = 'request-submit-status';
+  message(statusId, '');
+  const start = loanInstant(loanStart);
+  const end = loanInstant(loanEnd);
+  fieldError(loanDevice, loanDevice.value ? '' : 'Chọn thiết bị.');
+  fieldError(loanStart, start ? '' : 'Nhập ngày giờ bắt đầu hợp lệ.');
+  fieldError(loanEnd, !end ? 'Nhập ngày giờ kết thúc hợp lệ.'
+    : start && end <= start ? 'Giờ kết thúc phải sau giờ bắt đầu.' : '');
+  const invalid = fields.querySelector('[aria-invalid="true"]');
+  if (invalid) return invalid.focus();
+
+  const view = loanView;
+  const route = location.hash;
+  const data = { equipment_id: Number(loanDevice.value), start_at: start.toISOString(), end_at: end.toISOString() };
+  fields.disabled = true;
+  message(statusId, 'Đang gửi…');
+  try {
+    const created = await api('/loan-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': user.csrf_token },
+      body: JSON.stringify(data),
+    });
+    if (view.signal.aborted || route !== location.hash) return;
+    history.pushState(null, '', '#request/' + created.id);
+    showLoanScreen(created.id);
+  } catch (error) {
+    if (view.signal.aborted || route !== location.hash) return;
+    fields.disabled = false;
+    if (error.status === 401) return expired();
+    if (error.status === 404) {
+      message(statusId, '');
+      loanDevice.value = '';
+      fieldError(loanDevice, 'Thiết bị không còn khả dụng. Hãy chọn lại.');
+      return loadLoanCatalog(view, '', true);
+    }
+    if (error.status === 400) return message(statusId, 'Vui lòng kiểm tra thiết bị và khoảng giờ.', true);
+    if (error.message === 'CSRF_INVALID') {
+      return message(statusId, 'Mã xác thực phiên không hợp lệ. Hãy tải lại trang trước khi gửi lại.', true);
+    }
+    if (error.status === 403) return message(statusId, 'Bạn không có quyền gửi yêu cầu.', true);
+    message(statusId, 'Chưa xác nhận được kết quả. Hãy kiểm tra danh sách trước khi gửi lại.', true);
+  }
+}
+
+function isLoanRoute(hash) {
+  return hash === '#requests' || hash.startsWith('#request/');
+}
+
 function showBusinessScreen() {
+  if (isLoanRoute(location.hash)) {
+    showLoanScreen();
+    return;
+  }
   const availabilityRoute = /^#availability\/(\d+)$/.exec(location.hash);
   if (availabilityRoute) {
     show('availability');
@@ -254,8 +489,11 @@ async function checkSession() {
   } catch (error) {
     if (error.status === 401) {
       if (hadSession) expired();
-      else endSession((['#equipment', '#management'].includes(location.hash) || location.hash.startsWith('#availability/'))
-        ? 'Vui lòng đăng nhập để tiếp tục.' : '');
+      else {
+        if (isLoanRoute(location.hash)) loanLoginRoute = location.hash;
+        endSession((loanLoginRoute || ['#equipment', '#management'].includes(location.hash) || location.hash.startsWith('#availability/'))
+          ? 'Vui lòng đăng nhập để tiếp tục.' : '');
+      }
     } else {
       message('session-status', 'Không kiểm tra được phiên đăng nhập.', true);
       byId('session-retry').hidden = false;
@@ -302,7 +540,8 @@ byId('login-form').addEventListener('submit', async (event) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
     });
-    history.replaceState(null, '', '#equipment');
+    history.replaceState(null, '', loanLoginRoute || '#equipment');
+    loanLoginRoute = undefined;
     showBusinessScreen();
   } catch (error) {
     byId('password').value = '';
@@ -372,10 +611,17 @@ byId('lookup').addEventListener('input', () => {
   clearAvailability('Lựa chọn đã thay đổi. Xem lịch trống để cập nhật.');
 });
 byId('logout').addEventListener('click', logout);
+byId('request-form').addEventListener('submit', submitLoan);
+byId('request-form').addEventListener('input', (event) => fieldError(event.target));
+byId('request-catalog-retry').addEventListener('click', () => {
+  const params = new URLSearchParams(location.hash.split('?')[1]);
+  void loadLoanCatalog(loanView, loanDevice.value || (!loanDevice.options.length && params.get('equipment_id')) || '');
+});
 window.addEventListener('hashchange', () => {
   if (checkingSession) return;
   if (user) showBusinessScreen();
   else if (!byId('login').hidden && !byId('submit').disabled) {
+    if (isLoanRoute(location.hash)) loanLoginRoute = location.hash;
     endSession('Vui lòng đăng nhập để tiếp tục.');
   }
 });

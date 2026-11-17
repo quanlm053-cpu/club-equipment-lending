@@ -70,6 +70,8 @@ test('HTTP session, role checks, CSRF, expiry, revocation and login throttling',
     { id: 2, asset_code: 'DEMO-02', name: 'Máy chiếu' },
   ];
   const sessions = new Map();
+  const loan = { id: 12, equipment_id: 1, status: 'PENDING' };
+  const otherLoan = { id: 15, equipment_id: 2, status: 'PENDING' };
   const store = {
     userByUsername: (username) => users.find((user) => user.username === username),
     createSession: (hash, id) => sessions.set(hash.toString('hex'), { id, expired: false }),
@@ -79,6 +81,13 @@ test('HTTP session, role checks, CSRF, expiry, revocation and login throttling',
     },
     deleteSession: (hash) => sessions.delete(hash.toString('hex')),
     listEquipment: () => equipment,
+    createLoanRequest(borrowerId, { equipmentId, start, end }) {
+      assert.equal(borrowerId, 1);
+      if (equipmentId !== 1) return;
+      return Object.assign(loan, { start_at: start, end_at: end, created_at: new Date(0) });
+    },
+    listLoanRequests: borrowerId => borrowerId === 1 ? [loan] : [otherLoan],
+    readLoanRequest: (borrowerId, id) => borrowerId === 1 && id === loan.id ? loan : undefined,
   };
   let executions = 0;
   const action = '/test/manage/999';
@@ -124,6 +133,52 @@ test('HTTP session, role checks, CSRF, expiry, revocation and login throttling',
   assert.equal(executions, 0);
   assert.equal((await request(action, { method: 'POST', headers: manager })).status, 204);
   assert.equal(executions, 1);
+
+  const loanPath = '/loan-requests';
+  const validLoan = {
+    equipment_id: 1,
+    start_at: '2026-11-16T23:30:00+07:00',
+    end_at: '2026-11-17T00:30:00+07:00',
+  };
+  const post = (headers, body = validLoan) => request(loanPath, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  await expectError(await post({}), 401, 'AUTH_REQUIRED');
+  await expectError(await request(loanPath), 401, 'AUTH_REQUIRED');
+  await expectError(await request(loanPath, { headers: manager }), 403, 'FORBIDDEN');
+  await expectError(await post(manager), 403, 'FORBIDDEN');
+  await expectError(await request(loanPath + '/1', { headers: manager }), 403, 'FORBIDDEN');
+  await expectError(await post({ Cookie: member.Cookie }), 403, 'CSRF_INVALID');
+  await expectError(await post({ ...member, 'X-CSRF-Token': manager['X-CSRF-Token'] }), 403, 'CSRF_INVALID');
+  for (const invalid of [
+    {}, { ...validLoan, borrower_id: 2 }, { ...validLoan, status: 'APPROVED' },
+    { ...validLoan, equipment_id: '1' }, { ...validLoan, equipment_id: 2147483648 },
+    { ...validLoan, start_at: '2026-02-29T23:30:00+07:00' },
+    { ...validLoan, start_at: '2026-11-16T23:30:00' },
+    { ...validLoan, start_at: '0001-01-01T00:00:00+07:00' },
+    { ...validLoan, end_at: '2026-11-16T16:30:00Z' },
+    { ...validLoan, end_at: '2026-11-16T16:00:00Z' },
+  ]) {
+    await expectError(await post(member, invalid), 400, 'INVALID_INPUT');
+  }
+  await expectError(await request(loanPath + '/2147483648', { headers: member }), 400, 'INVALID_INPUT');
+  await expectError(await post(member, { ...validLoan, equipment_id: 99 }), 404, 'NOT_FOUND');
+  const created = await post(member);
+  assert.equal(created.status, 201);
+  assert.equal(created.headers.get('location'), loanPath + '/12');
+  const saved = await created.json();
+  assert.deepEqual(saved, {
+    id: 12, equipment_id: 1, start_at: '2026-11-16T16:30:00.000Z',
+    end_at: '2026-11-16T17:30:00.000Z', created_at: '1970-01-01T00:00:00.000Z', status: 'PENDING',
+  });
+  assert.deepEqual(await (await request(loanPath, { headers: member })).json(), [saved]);
+  const detail = await request(loanPath + '/12', { headers: member });
+  assert.equal(detail.headers.get('cache-control'), 'no-store');
+  assert.deepEqual(await detail.json(), saved);
+  await expectError(await request(loanPath + '/15', { headers: member }), 404, 'NOT_FOUND');
+  await expectError(await request(loanPath + '/99', { headers: member }), 404, 'NOT_FOUND');
 
   const logout = await request('/auth/logout', { method: 'POST', headers: manager });
   assert.equal(logout.status, 204);
