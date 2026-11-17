@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
+import { availabilityInput, availableSlots } from './availability.js';
 import { sessionSeconds } from './database.js';
 import { hashPassword, verifyPassword } from './password.js';
 
@@ -90,6 +91,23 @@ export async function createApp({ store, origin, trustedProxyIp, routes = new Ma
   protectedRoutes.set('GET /equipment', {
     handle: async (_req, res) => json(res, 200, await store.listEquipment()),
   });
+  const availabilityRoute = {
+    roles: new Set(['MEMBER', 'MANAGER']),
+    async handle(_req, res, _session, { id, query }) {
+      const input = availabilityInput(id, query);
+      if (!input) return error(res, 400, 'INVALID_INPUT');
+      const { equipmentId, from, to } = input;
+      const rows = await store.readAvailability(equipmentId, from, to);
+      const asOf = new Date(now()).toISOString();
+      if (!rows.length) return error(res, 404, 'NOT_FOUND');
+      json(res, 200, {
+        equipment_id: equipmentId,
+        timezone: 'Asia/Bangkok',
+        as_of: asOf,
+        available: availableSlots(from, to, rows),
+      });
+    },
+  };
 
   async function login(req, res) {
     if (req.headers.origin !== origin) return error(res, 403, 'ORIGIN_FORBIDDEN');
@@ -118,11 +136,12 @@ export async function createApp({ store, origin, trustedProxyIp, routes = new Ma
   return async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     try {
-      const { pathname } = new URL(req.url, origin);
+      const { pathname, searchParams } = new URL(req.url, origin);
       const key = req.method + ' ' + pathname;
       if (key === 'POST /auth/login') return await login(req, res);
 
-      const route = protectedRoutes.get(key);
+      const availability = /^GET \/equipment\/([^/]+)\/availability$/.exec(key);
+      const route = availability ? availabilityRoute : protectedRoutes.get(key);
       if (!route) return error(res, 404, 'NOT_FOUND');
 
       const token = sessionToken(req);
@@ -130,9 +149,12 @@ export async function createApp({ store, origin, trustedProxyIp, routes = new Ma
       const user = hash && await store.userBySession(hash);
       if (!user) return error(res, 401, 'AUTH_REQUIRED');
       if (route.role && user.role !== route.role) return error(res, 403, 'FORBIDDEN');
+      if (route.roles && !route.roles.has(user.role)) return error(res, 403, 'FORBIDDEN');
       const csrf = csrfToken(token);
       if (!safeMethods.has(req.method) && !hasValidCsrf(req, csrf)) return error(res, 403, 'CSRF_INVALID');
-      await route.handle(req, res, { user: identity(user, csrf), hash });
+      const session = { user: identity(user, csrf), hash };
+      if (availability) return await route.handle(req, res, session, { id: availability[1], query: searchParams });
+      await route.handle(req, res, session);
     } catch (cause) {
       logger.error('Lending API request failed', cause.code ?? cause.name);
       if (res.headersSent) return res.destroy();
