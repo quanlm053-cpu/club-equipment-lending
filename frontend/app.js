@@ -1,7 +1,22 @@
 const byId = (id) => document.getElementById(id);
-const screens = ['session', 'login', 'equipment', 'management'];
+const screens = ['session', 'login', 'equipment', 'availability', 'management'];
+const device = byId('device');
+const fromInput = byId('from');
+const toInput = byId('to');
+const clubOffset = '+07:00';
+const clubTime = {
+  timeZone: clubOffset,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+};
+const minuteFormat = new Intl.DateTimeFormat('vi-VN', clubTime);
+const secondFormat = new Intl.DateTimeFormat('vi-VN', { ...clubTime, second: '2-digit' });
 let user = null;
 let catalogRequest;
+let availabilityRequest;
 let checkingSession = false;
 let loggingOut = false;
 
@@ -29,6 +44,11 @@ function message(id, text, error = false) {
 
 function show(screen) {
   catalogRequest?.abort();
+  clearAvailability();
+  byId('lookup').reset();
+  device.replaceChildren();
+  byId('lookup-fields').disabled = true;
+  byId('app-panel').classList.toggle('panel-wide', screen === 'availability');
   byId('assets').replaceChildren();
   byId('assets').hidden = true;
   for (const id of screens) byId(id).hidden = id !== screen;
@@ -40,7 +60,7 @@ function show(screen) {
   byId('management-link').hidden = !manager;
   for (const id of ['equipment', 'management']) {
     const link = byId(id + '-link');
-    if (id === screen) link.setAttribute('aria-current', 'page');
+    if (id === screen || (id === 'equipment' && screen === 'availability')) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   }
   byId(screen + '-title').focus();
@@ -59,38 +79,155 @@ function expired() {
   endSession('Phiên đã hết hạn. Vui lòng đăng nhập lại.');
 }
 
-async function loadCatalog() {
+async function loadCatalog(selectedId) {
   catalogRequest?.abort();
   const request = new AbortController();
   catalogRequest = request;
-  byId('retry').hidden = true;
-  message('catalog-status', 'Đang tải danh mục…');
+  const forLookup = selectedId !== undefined;
+  const statusId = forLookup ? 'lookup-catalog-status' : 'catalog-status';
+  const retry = byId(forLookup ? 'lookup-catalog-retry' : 'retry');
+  retry.hidden = true;
+  message(statusId, 'Đang tải danh mục…');
 
   try {
     const equipment = await api('/equipment', { signal: request.signal });
     if (request.signal.aborted) return;
+    if (forLookup) {
+      const options = equipment.map(({ id, name, asset_code }) => new Option(name + ' · ' + asset_code, id));
+      device.replaceChildren(...options);
+      device.value = selectedId;
+      const missing = options.length > 0 && device.selectedIndex < 0;
+      if (missing) {
+        const placeholder = new Option('Chọn thiết bị', '');
+        placeholder.disabled = true;
+        device.prepend(placeholder);
+        device.value = '';
+      }
+      byId('lookup-fields').disabled = options.length === 0;
+      message(statusId, options.length === 0 ? 'Chưa có thiết bị để tra cứu.'
+        : missing ? 'Thiết bị đã chọn không còn khả dụng. Hãy chọn thiết bị trong danh mục.' : '');
+      return;
+    }
     const rows = equipment.map(({ id, asset_code, name }) => {
       const item = document.createElement('li');
       item.className = 'asset';
       item.dataset.equipmentId = id;
       const title = document.createElement('strong');
       title.textContent = name;
-      item.append(title, document.createElement('br'), asset_code);
+      const details = document.createElement('div');
+      details.append(title, document.createElement('br'), asset_code);
+      const link = document.createElement('a');
+      link.href = '#availability/' + encodeURIComponent(id);
+      link.textContent = 'Xem lịch';
+      link.setAttribute('aria-label', 'Xem lịch · ' + name + ' · ' + asset_code);
+      item.append(details, link);
       return item;
     });
     byId('assets').replaceChildren(...rows);
     byId('assets').hidden = rows.length === 0;
-    message('catalog-status', rows.length ? '' : 'Chưa có thiết bị.');
+    message(statusId, rows.length ? '' : 'Chưa có thiết bị để tra cứu.');
   } catch (error) {
     if (request.signal.aborted) return;
     if (error.status === 401) return expired();
-    if (error.status === 403) return message('catalog-status', 'Bạn không có quyền truy cập.', true);
-    message('catalog-status', 'Không tải được danh mục.', true);
-    byId('retry').hidden = false;
+    if (error.status === 403) return message(statusId, 'Bạn không có quyền truy cập.', true);
+    message(statusId, 'Không tải được danh mục.', true);
+    retry.hidden = false;
+  }
+}
+
+function fieldError(input, text = '') {
+  message(input.id + '-error', text, Boolean(text));
+  input.setAttribute('aria-invalid', String(Boolean(text)));
+}
+
+function clearAvailability(text = '') {
+  availabilityRequest?.abort();
+  for (const id of ['lookup-context', 'lookup-updated', 'slots']) byId(id).replaceChildren();
+  for (const id of ['slots', 'lookup-retry', 'reload-catalog']) byId(id).hidden = true;
+  for (const input of [device, fromInput, toInput]) fieldError(input);
+  message('lookup-status', text);
+}
+
+function toClubInstant(input) {
+  if (!input.validity.valid || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(input.value)) return;
+  const instant = new Date(input.value + ':00' + clubOffset);
+  if (instant.getUTCFullYear() >= 1 && instant.getUTCFullYear() <= 9999) return instant;
+}
+
+function formatClubTime(value) {
+  const instant = new Date(value);
+  const millis = instant.getUTCMilliseconds();
+  if (millis) {
+    const fraction = String(millis).padStart(3, '0');
+    return secondFormat.formatToParts(instant).map(({ type, value }) =>
+      type === 'second' ? value + ',' + fraction : value).join('');
+  }
+  return (instant.getUTCSeconds() ? secondFormat : minuteFormat).format(instant);
+}
+
+async function lookupAvailability(event) {
+  event.preventDefault();
+  if (byId('lookup-fields').disabled || byId('availability').hidden) return;
+  clearAvailability();
+  const from = toClubInstant(fromInput);
+  const to = toClubInstant(toInput);
+  fieldError(device, device.value ? '' : 'Chọn thiết bị để tra cứu.');
+  fieldError(fromInput, from ? '' : 'Nhập ngày giờ bắt đầu hợp lệ.');
+  fieldError(toInput, !to ? 'Nhập ngày giờ kết thúc hợp lệ.'
+    : to <= from ? 'Giờ kết thúc phải sau giờ bắt đầu.' : '');
+  const invalid = byId('lookup').querySelector('[aria-invalid="true"]');
+  if (invalid) {
+    invalid.focus();
+    return;
+  }
+
+  const request = new AbortController();
+  availabilityRequest = request;
+  const query = new URLSearchParams({ from: from.toISOString(), to: to.toISOString() });
+  const selected = device.selectedOptions[0];
+  message('lookup-status', 'Đang tải lịch…');
+  try {
+    const { as_of, available } = await api('/equipment/' + encodeURIComponent(selected.value)
+      + '/availability?' + query, { signal: request.signal });
+    if (request.signal.aborted) return;
+    const rows = available.map(({ start_at, end_at }) => {
+      const row = document.createElement('li');
+      row.textContent = formatClubTime(start_at) + ' → ' + formatClubTime(end_at);
+      return row;
+    });
+    const updated = formatClubTime(as_of);
+    message('lookup-context', selected.text + ' · ' + formatClubTime(from) + ' → ' + formatClubTime(to));
+    byId('slots').replaceChildren(...rows);
+    byId('slots').hidden = rows.length === 0;
+    message('lookup-status', rows.length ? '' : 'Không có khung giờ trống trong khoảng đã chọn.');
+    message('lookup-updated', 'Cập nhật lúc ' + updated);
+  } catch (error) {
+    if (request.signal.aborted) return;
+    switch (error.status) {
+      case 400:
+        return message('lookup-status', 'Kiểm tra thiết bị và ngày giờ đã nhập.', true);
+      case 401:
+        return expired();
+      case 403:
+        return message('lookup-status', 'Tài khoản thiếu quyền xem lịch.', true);
+      case 404:
+        byId('reload-catalog').hidden = false;
+        return message('lookup-status', 'Thiết bị không còn khả dụng.', true);
+      default:
+        byId('lookup-retry').hidden = false;
+        message('lookup-status', 'Chưa tải được lịch. Hãy thử lại.', true);
+    }
   }
 }
 
 function showBusinessScreen() {
+  const availabilityRoute = /^#availability\/(\d+)$/.exec(location.hash);
+  if (availabilityRoute) {
+    show('availability');
+    message('lookup-status', 'Chọn khoảng thời gian rồi xem lịch trống.');
+    void loadCatalog(availabilityRoute[1]);
+    return;
+  }
   if (location.hash === '#management') {
     show('management');
     message('management-status', user.role === 'MANAGER'
@@ -117,7 +254,7 @@ async function checkSession() {
   } catch (error) {
     if (error.status === 401) {
       if (hadSession) expired();
-      else endSession(['#equipment', '#management'].includes(location.hash)
+      else endSession((['#equipment', '#management'].includes(location.hash) || location.hash.startsWith('#availability/'))
         ? 'Vui lòng đăng nhập để tiếp tục.' : '');
     } else {
       message('session-status', 'Không kiểm tra được phiên đăng nhập.', true);
@@ -222,6 +359,18 @@ byId('retry').addEventListener('click', () => {
   void loadCatalog();
 });
 byId('session-retry').addEventListener('click', checkSession);
+byId('lookup-catalog-retry').addEventListener('click', () => {
+  byId('availability-title').focus();
+  void loadCatalog(location.hash.slice('#availability/'.length));
+});
+byId('lookup').addEventListener('submit', lookupAvailability);
+byId('lookup-retry').addEventListener('click', () => {
+  byId('lookup').querySelector('button').focus();
+  byId('lookup').requestSubmit();
+});
+byId('lookup').addEventListener('input', () => {
+  clearAvailability('Lựa chọn đã thay đổi. Xem lịch trống để cập nhật.');
+});
 byId('logout').addEventListener('click', logout);
 window.addEventListener('hashchange', () => {
   if (checkingSession) return;

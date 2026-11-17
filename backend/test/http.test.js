@@ -1,8 +1,62 @@
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import { test } from 'node:test';
 import { createApp } from '../app.js';
 import { hashPassword } from '../password.js';
 import { cookie, expectError, login, origin, serve } from './helpers.js';
+
+test('availability validates input after authorization and maps store results', async (t) => {
+  let role = 'MEMBER';
+  let fail = false;
+  let reads = 0;
+  const from = '2026-11-16T02:00:00.123Z';
+  const to = '2026-11-17T06:00:00.000Z';
+  const store = {
+    userBySession: () => ({ id: 1, username: 'demo.member', role }),
+    readAvailability(id, start, end) {
+      reads++;
+      assert.equal(start.toISOString(), from);
+      assert.equal(end.toISOString(), to);
+      if (fail) throw new Error('Synthetic database failure');
+      return id === 1 ? [
+        { start_at: new Date('2026-11-15T01:00:00Z'), end_at: new Date('2026-11-16T03:00:00Z') },
+        { start_at: new Date('2026-11-16T03:00:00Z'), end_at: new Date('2026-11-16T04:00:00.456Z') },
+      ] : [];
+    },
+  };
+  const request = await serve(t, await createApp({ store, origin, logger: { error() {} } }));
+  const headers = { Cookie: '__Host-lending_session=' + randomBytes(32).toString('base64url') };
+  const path = '/equipment/1/availability';
+  const query = '?from=' + from + '&to=' + to;
+  await expectError(await request(path), 401, 'AUTH_REQUIRED');
+  role = 'OTHER';
+  await expectError(await request(path, { headers }), 403, 'FORBIDDEN');
+  role = 'MEMBER';
+  for (const invalid of [
+    path, path + '?from=' + from, path + query + '&from=' + from,
+    '/equipment/2147483648/availability' + query, '/equipment/1.5/availability' + query,
+    ...['2026-02-29T02:00:00Z', '2026-11-16T24:00:00Z', '2026-11-16T02:00:00',
+      '0001-01-01T00:00:00%2B07:00', '2026-11-16T02:00:00.0001Z', to, '2026-11-18T00:00:00Z']
+      .map(value => path + '?from=' + value + '&to=' + to),
+  ]) {
+    await expectError(await request(invalid, { headers }), 400, 'INVALID_INPUT');
+  }
+  assert.equal(reads, 0);
+  await expectError(await request('/equipment/2/availability' + query, { headers }), 404, 'NOT_FOUND');
+  const response = await request(path + '?from=2026-11-16T09:00:00.123%2B07:00&to=' + to, { headers });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  const body = await response.json();
+  assert.equal(new Date(body.as_of).toISOString(), body.as_of);
+  assert.deepEqual(body, {
+    equipment_id: 1,
+    timezone: 'Asia/Bangkok',
+    as_of: body.as_of,
+    available: [{ start_at: '2026-11-16T04:00:00.456Z', end_at: to }],
+  });
+  fail = true;
+  await expectError(await request(path + query, { headers }), 500, 'INTERNAL_ERROR');
+});
 
 test('HTTP session, role checks, CSRF, expiry, revocation and login throttling', async (t) => {
   const password = 'synthetic-test-password';

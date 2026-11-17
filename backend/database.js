@@ -9,17 +9,20 @@ export async function connectDatabase(env = process.env) {
   const sql = native
     ? (await import('mssql/msnodesqlv8.js')).default
     : (await import('mssql')).default;
-  const pool = await new sql.ConnectionPool(native ? { connectionString: env.DATABASE_URL } : env.DATABASE_URL).connect();
+  const config = native ? { connectionString: env.DATABASE_URL }
+    : sql.ConnectionPool.parseConnectionString(env.DATABASE_URL);
+  config.options = { ...config.options, useUTC: true };
+  const pool = await new sql.ConnectionPool(config).connect();
   return { pool, sql };
 }
 
 function tables(schema = 'dbo') {
   if (!/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/.test(schema)) throw new Error('Invalid SQL Server schema');
-  return Object.fromEntries(['users', 'sessions', 'equipment'].map(name => [name, `[${schema}].[${name}]`]));
+  return Object.fromEntries(['users', 'sessions', 'equipment', 'loan_requests'].map(name => [name, `[${schema}].[${name}]`]));
 }
 
 export function sqlServerStore(pool, sql, schema) {
-  const { users, sessions, equipment } = tables(schema);
+  const { users, sessions, equipment, loan_requests } = tables(schema);
   return {
     async userByUsername(username) {
       const result = await pool.request().input('username', sql.NVarChar(255), username)
@@ -49,6 +52,20 @@ export function sqlServerStore(pool, sql, schema) {
       const result = await pool.request().query(`SELECT id, asset_code, name FROM ${equipment} ORDER BY asset_code`);
       return result.recordset;
     },
+    async readAvailability(equipmentId, from, to) {
+      const result = await pool.request().input('equipment_id', sql.Int, equipmentId)
+        .input('from_utc', sql.DateTime2(3), from).input('to_utc', sql.DateTime2(3), to)
+        .query(`SELECT e.id AS equipment_id, r.start_at, r.end_at
+                FROM ${equipment} AS e WITH (HOLDLOCK)
+                LEFT JOIN ${loan_requests} AS r WITH (HOLDLOCK)
+                  ON r.equipment_id = e.id
+                  AND r.status IN ('APPROVED', 'HANDED_OVER')
+                  AND r.start_at < @to_utc
+                  AND r.end_at > @from_utc
+                WHERE e.id = @equipment_id
+                ORDER BY r.start_at, r.end_at`);
+      return result.recordset;
+    },
   };
 }
 
@@ -72,8 +89,12 @@ async function transaction(pool, sql, schema, work) {
 
 export async function migrate(pool, sql, schema = 'dbo') {
   tables(schema);
-  const script = await readFile(new URL('./migrations/001-foundation.sql', import.meta.url), 'utf8');
-  await transaction(pool, sql, schema, tx => tx.request().batch(script.replaceAll('__SCHEMA__', schema)));
+  const migrations = ['001-foundation.sql', '002-loan-requests.sql'];
+  const scripts = await Promise.all(migrations.map(file =>
+    readFile(new URL('./migrations/' + file, import.meta.url), 'utf8')));
+  await transaction(pool, sql, schema, async tx => {
+    for (const script of scripts) await tx.request().batch(script.replaceAll('__SCHEMA__', schema));
+  });
 }
 
 export async function seedDemo(pool, sql, env, schema = 'dbo') {

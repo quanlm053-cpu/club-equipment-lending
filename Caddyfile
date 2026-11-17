@@ -1,6 +1,6 @@
 https://localhost:8443 {
     tls internal
-    @api path /auth/* /equipment
+    @api path /auth/* /equipment /equipment/*/availability
     handle @api {
         reverse_proxy 127.0.0.1:3000 {
             header_up X-Lending-Client-IP {http.request.remote.host}

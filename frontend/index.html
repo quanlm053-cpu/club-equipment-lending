@@ -18,7 +18,7 @@
     </nav>
   </div></header>
   <div class="layout">
-    <main class="panel">
+    <main class="panel" id="app-panel">
       <noscript>Vui lòng bật JavaScript để sử dụng ứng dụng.</noscript>
       <section id="session" aria-labelledby="session-title">
         <h1 id="session-title" tabindex="-1">Phiên đăng nhập</h1>
@@ -46,6 +46,44 @@
         <p id="catalog-status" role="status"></p>
         <button type="button" id="retry" hidden>Thử lại</button>
         <ul id="assets" class="assets" role="list" hidden></ul>
+      </section>
+      <section id="availability" aria-labelledby="availability-title" hidden>
+        <a href="#equipment">Về danh mục</a>
+        <h1 id="availability-title" tabindex="-1">Lịch trống thiết bị</h1>
+        <div class="availability-grid">
+          <section class="availability-card" aria-labelledby="lookup-title">
+            <h2 id="lookup-title">Khoảng tra cứu</h2>
+            <p class="muted">Giờ CLB · Asia/Bangkok (UTC+07:00)</p>
+            <p id="lookup-catalog-status" role="status"></p>
+            <button type="button" id="lookup-catalog-retry" hidden>Thử lại</button>
+            <form id="lookup" novalidate>
+              <fieldset id="lookup-fields" disabled aria-labelledby="lookup-title">
+                <label for="device">Thiết bị</label>
+                <select id="device" required aria-describedby="device-error"></select>
+                <small id="device-error" class="error"></small>
+                <label for="from">Bắt đầu</label>
+                <input id="from" type="datetime-local" step="60" required aria-describedby="from-error">
+                <small id="from-error" class="error"></small>
+                <label for="to">Kết thúc</label>
+                <input id="to" type="datetime-local" step="60" required aria-describedby="to-error">
+                <small id="to-error" class="error"></small>
+                <button class="primary" type="submit">Xem lịch trống</button>
+              </fieldset>
+            </form>
+          </section>
+          <section class="availability-card" aria-labelledby="slots-title">
+            <h2 id="slots-title">Khung giờ trống</h2>
+            <p class="muted">Giờ CLB · Asia/Bangkok (UTC+07:00)</p>
+            <div role="status" aria-live="polite">
+              <p id="lookup-context"></p>
+              <p id="lookup-status"></p>
+              <ul id="slots" class="slots" role="list" hidden></ul>
+              <p id="lookup-updated" class="muted"></p>
+            </div>
+            <button id="lookup-retry" type="button" hidden>Thử lại</button>
+            <a href="#equipment" id="reload-catalog" hidden>Tải lại danh mục</a>
+          </section>
+        </div>
       </section>
       <section id="management" aria-labelledby="management-title" hidden>
         <h1 id="management-title" tabindex="-1">Quản lý</h1>
