@@ -9,7 +9,7 @@
     "start": "npm start --workspace backend",
     "migrate": "npm run migrate --workspace backend",
     "seed": "npm run seed --workspace backend",
-    "test": "npm test --workspace backend",
+    "test": "npm test --workspace backend && node --test frontend/test/management-session.test.cjs",
     "test:sqlserver": "npm run test:sqlserver --workspace backend",
     "build": "node scripts/build.mjs"
   }

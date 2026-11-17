@@ -88,13 +88,14 @@ test('HTTP session, role checks, CSRF, expiry, revocation and login throttling',
     },
     listLoanRequests: borrowerId => borrowerId === 1 ? [loan] : [otherLoan],
     readLoanRequest: (borrowerId, id) => borrowerId === 1 && id === loan.id ? loan : undefined,
-    listPendingLoanRequests: () => [loan, otherLoan].filter(row => row.status === 'PENDING'),
+    listManagedLoanRequests: status => [loan, otherLoan].filter(row => row.status === status),
     readManagedLoanRequest: id => [loan, otherLoan].find(row => row.id === id),
     decideLoanRequest(id, actorId, target) {
       assert.equal(actorId, 2);
       const request = [loan, otherLoan].find(row => row.id === id);
       if (!request) return { code: 'NOT_FOUND' };
-      if (request.status !== 'PENDING') return { code: 'INVALID_TRANSITION' };
+      const source = target === 'HANDED_OVER' ? 'APPROVED' : 'PENDING';
+      if (request.status !== source) return { code: 'INVALID_TRANSITION' };
       if (request === otherLoan && target === 'APPROVED') return { code: 'SCHEDULE_CONFLICT' };
       request.status = target;
       return { loan: request };
@@ -203,6 +204,12 @@ test('HTTP session, role checks, CSRF, expiry, revocation and login throttling',
   await expectError(await decide('2147483648', 'approve', manager), 400, 'INVALID_INPUT');
   await expectError(await decide(99, 'reject', manager), 404, 'NOT_FOUND');
   await expectError(await decide(15, 'approve', manager), 409, 'SCHEDULE_CONFLICT');
+  await expectError(await decide(12, 'handover', {}), 401, 'AUTH_REQUIRED');
+  await expectError(await decide(12, 'handover', member), 403, 'FORBIDDEN');
+  await expectError(await decide(12, 'handover', { Cookie: manager.Cookie }), 403, 'CSRF_INVALID');
+  await expectError(await decide('2147483648', 'handover', manager), 400, 'INVALID_REQUEST');
+  await expectError(await decide(99, 'handover', manager), 404, 'NOT_FOUND');
+  await expectError(await decide(12, 'handover', manager), 409, 'INVALID_TRANSITION');
   assert.deepEqual(await (await request(loanPath, { headers: manager })).json(), [saved, otherLoan]);
   const rejected = await decide(12, 'reject', manager);
   assert.equal(rejected.status, 200);
@@ -212,6 +219,18 @@ test('HTTP session, role checks, CSRF, expiry, revocation and login throttling',
   const emptyQueue = await request(loanPath, { headers: manager });
   assert.equal(emptyQueue.status, 200);
   assert.deepEqual(await emptyQueue.json(), []);
+
+  loan.status = 'APPROVED';
+  const approvedPath = loanPath + '?status=APPROVED';
+  assert.deepEqual(await (await request(approvedPath, { headers: manager })).json(),
+    [{ ...saved, status: 'APPROVED' }]);
+  const handover = await decide(12, 'handover', manager);
+  assert.equal(handover.status, 200);
+  const delivered = { ...saved, status: 'HANDED_OVER' };
+  assert.deepEqual(await handover.json(), delivered);
+  assert.deepEqual(await (await request(approvedPath, { headers: manager })).json(), []);
+  assert.deepEqual(await (await request(approvedPath, { headers: member })).json(), [delivered]);
+  await expectError(await decide(12, 'handover', manager), 409, 'INVALID_TRANSITION');
 
   const logout = await request('/auth/logout', { method: 'POST', headers: manager });
   assert.equal(logout.status, 204);

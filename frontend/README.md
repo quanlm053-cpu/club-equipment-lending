@@ -6,6 +6,19 @@
 
    Dùng chứng chỉ mà trình duyệt tin cậy. Với Caddy cục bộ, có thể dùng `caddy trust` để cài CA nội bộ khi tài khoản có quyền. Truy cập `https://localhost:8443/`.
 
+## Chạy thử Story #115
+
+1. Thiết lập môi trường demo như trên, áp dụng thêm migration `005-loan-request-active-holder.sql`. Dùng `demo.member` tạo hai yêu cầu sát biên cho cùng thiết bị. Dùng `demo.manager` duyệt cả hai.
+2. Mở **Yêu cầu đã duyệt** (`/#management/approved`), vào chi tiết lượt đầu và chọn **Xác nhận giao**. Kiểm tra chi tiết hiện **Đã giao** và lượt đầu rời danh sách đã duyệt khi quay về.
+3. Thử giao lượt kế tiếp. Chi tiết báo thiết bị vẫn đang được giữ và lượt này vẫn **Đã duyệt**. Tải lại **Yêu cầu của tôi** trong phiên thành viên và mở chi tiết lượt đầu để thấy **Đã giao** ở cả hai màn hình.
+4. Mô phỏng mất phản hồi POST. Kiểm tra nút giao bị khóa. Chọn **Tải lại chi tiết**. Nếu đã lưu, chi tiết hiện **Đã giao**. Nếu vẫn **Đã duyệt**, có thể thử giao lại. Chặn lượt đọc trạng thái để kiểm tra giao diện vẫn khóa nút giao và cho thử tải lại.
+5. Dùng phiên thành viên mở trực tiếp danh sách đã duyệt hoặc chi tiết quản lý. Kiểm tra màn hình báo thiếu quyền. Với phiên quản lý hết hạn, đăng nhập lại và kiểm tra chi tiết được tải trước khi có thể giao.
+
+### Kết quả Task #146
+
+- Chrome headless kiểm tra bản build cục bộ với phản hồi API mô phỏng và dữ liệu tổng hợp. Đạt các ca danh sách lọc, tải và lỗi đọc, rỗng, khóa gửi lặp, giao thành công, thiết bị còn được giữ, đổi trạng thái, làm mới CSRF, thiếu quyền, hết phiên, mất phản hồi trước và sau khi lưu, đọc lại thất bại và hai màn hình thành viên.
+- `npm run build`, `npm test` (3/3), `node --test frontend/test/management-session.test.cjs` (5/5) và `git diff --check` đều đạt. Bộ điều phối chạy kiểm thử SQL Server trên cùng checkout và báo đạt 2/2 theo log `1794917045755727900-story-115-sqlserver.log`. Kiểm thử trình duyệt dùng phản hồi mô phỏng. Chạy thử tích hợp qua HTTPS với SQL Server theo các bước trên.
+
 ## Chạy thử Story #114
 
 1. Dùng môi trường demo theo hướng dẫn trên, áp dụng cả migration `004-loan-events.sql`. Với `demo.member`, tạo hai yêu cầu chồng giờ trên DEMO-01, một yêu cầu bắt đầu đúng lúc yêu cầu đầu kết thúc và một yêu cầu cùng giờ yêu cầu đầu trên DEMO-02.
