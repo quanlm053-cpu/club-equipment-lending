@@ -1,4 +1,4 @@
-# Bàn giao backend Story #111–113
+# Bàn giao backend Story #111–114
 
 ## Khởi tạo
 
@@ -27,7 +27,7 @@ Lỗi có cấu trúc `{ code }`. Với `401 AUTH_REQUIRED`, FE xóa dữ liệu
 
 Caddy ghi đè `X-Lending-Client-IP` bằng IP của kết nối tới Caddy. API chỉ dùng header chứa một IP hợp lệ từ kết nối TCP có nguồn `127.0.0.1`. Các trường hợp khác dùng IP của kết nối tới API. Khi triển khai theo `Caddyfile`, giữ API trên loopback và cho khách truy cập qua Caddy. Cấu hình này tin cậy tiến trình cục bộ có thể kết nối từ `127.0.0.1`.
 
-Các route nghiệp vụ đăng ký qua `routes` của `createApp` đều yêu cầu phiên. Route quản lý đặt `role: 'MANAGER'` để kiểm tra quyền trước khi chạy handler. Kiểm tra CSRF tự áp dụng cho lệnh ghi. Hai mã `DEMO-01` và `DEMO-02` có ID vật lý riêng. Lệnh duyệt cùng giao dịch khóa theo thiết bị thuộc Story #114.
+Các route nghiệp vụ đăng ký qua `routes` của `createApp` đều yêu cầu phiên. Route quản lý đặt `role: 'MANAGER'` để kiểm tra quyền trước khi chạy handler. Kiểm tra CSRF tự áp dụng cho lệnh ghi. Hai mã `DEMO-01` và `DEMO-02` có ID vật lý riêng.
 
 ### Lịch trống Story #112
 
@@ -59,10 +59,23 @@ Mỗi đối tượng có `id`, `equipment_id`, `start_at`, `end_at`, `created_a
 
 `404 NOT_FOUND` khi POST nghĩa là thiết bị không tồn tại. Khi GET chi tiết, cùng phản hồi này áp dụng cho ID chưa tồn tại và yêu cầu của thành viên khác. Giữ dữ liệu nhập khi nhận `400 INVALID_INPUT`. Nếu POST mất phản hồi hoặc trả `500 INTERNAL_ERROR`, hướng dẫn thành viên kiểm tra danh sách trước khi gửi lại.
 
+### Duyệt và từ chối Story #114
+
+Chạy `npm run migrate` để áp dụng `004-loan-events.sql`. Với cookie phiên `MANAGER`, `GET /loan-requests` trả toàn bộ yêu cầu `PENDING`, sắp theo `created_at` rồi `id` tăng dần. Hàng đợi rỗng trả `[]`. `GET /loan-requests/{id}` trả chi tiết ở mọi trạng thái. Hai API đọc này thêm `borrower_id`, `borrower_username`, `equipment_name` và `equipment_asset_code` vào các trường của #113.
+
+Gọi `POST /loan-requests/{id}/approve` hoặc `POST /loan-requests/{id}/reject` với cookie phiên quản lý, header `X-CSRF-Token` và body rỗng. `200` trả bản ghi đã commit gồm các trường của #113 và `borrower_id`. Chi tiết GET cung cấp các trường bổ sung từ JOIN. Ngày giờ API là UTC ISO 8601, FE hiển thị theo Asia/Bangkok.
+
+- Với `409 SCHEDULE_CONFLICT`, làm mới hàng đợi. Yêu cầu vẫn `PENDING` và quản lý có thể từ chối.
+- Với `409 INVALID_TRANSITION`, tải lại chi tiết và hàng đợi. Chỉ bật thao tác khi chi tiết mới là `PENDING`.
+- Với `500 INTERNAL_ERROR`, timeout hoặc mất mạng khi ghi, tải lại chi tiết rồi đồng bộ hàng đợi trước khi cho phép gửi lệnh mới.
+- `400 INVALID_INPUT` áp dụng cho ID sai cú pháp hoặc ngoài miền `int` dương. `404 NOT_FOUND` áp dụng cho ID hợp lệ nhưng không tồn tại.
+
+Các lệnh đổi trạng thái khóa dòng thiết bị trước rồi khóa yêu cầu. Cập nhật và ghi sự kiện vào `loan_events` trong cùng giao dịch. Các lệnh giao và nhận lại ở #115–116 cần dùng cùng thứ tự khóa.
+
 ## Kiểm thử
 
 - `npm test` chạy kiểm thử HTTP với kho dữ liệu thử nghiệm trong bộ nhớ.
-- `npm run test:sqlserver` chạy migration, seed hai lần và kiểm thử phiên, lịch và API yêu cầu mượn trên Microsoft SQL Server. Đặt `TEST_DATABASE_URL` trỏ tới DB kiểm thử dùng dữ liệu tổng hợp. Tài khoản DB cần quyền tạo schema thử nghiệm. Bộ kiểm thử tạo và dọn schema riêng.
+- `npm run test:sqlserver` kiểm tra migration và seed lặp, phiên, lịch, API yêu cầu mượn và các lệnh quyết định đồng thời, bao gồm hoàn tác khi ghi sự kiện lỗi. Đặt `TEST_DATABASE_URL` trỏ tới DB kiểm thử dùng dữ liệu tổng hợp. Tài khoản DB cần quyền tạo schema thử nghiệm. Bộ kiểm thử tạo và dọn schema riêng.
 
 ### SQL Server kiểm thử trên máy Windows
 

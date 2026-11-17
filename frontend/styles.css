@@ -52,11 +52,22 @@ input[aria-invalid="true"], #device[aria-invalid="true"], #request-device[aria-i
 #request-form small { display: block; }
 #request-form button { margin-top: 1rem; }
 #request-submit-status:empty { margin: 0; }
+.management-actions { display: flex; align-items: center; gap: .65rem; flex-wrap: wrap; }
+.management-actions h2, .management-card h3, .management-card p { margin: 0; }
+.management-card h3 { font-size: 1.15rem; }
+.management-card .request-badge { margin-top: .4rem; }
+.management-card button.reject { color: #872d2d; background: white; }
+.management-warning { grid-column: 1 / -1; padding: .65rem .85rem; border-radius: 8px; background: #fff0c9; color: #61440b; }
+#management-status, #management-feedback { margin: .7rem 0; }
+#management-status:empty, #management-feedback:empty { margin: 0; }
+#decision-dialog { width: min(30rem, 92vw); padding: 1.5rem; border: 1px solid #cbd8d1; border-radius: 14px; color: inherit; }
+#decision-dialog::backdrop { background: #142f2bcc; }
 #lookup-catalog-status:empty, #lookup-context:empty, #lookup-status:empty, #lookup-updated:empty { margin: 0; }
 #action-status { margin-top: 1.1rem; margin-bottom: 0; }
 #action-status:empty, #login-status:empty, #catalog-status:empty { margin: 0; }
 [hidden] { display: none !important; }
 @media (max-width: 720px) {
+  .management-card { grid-template-columns: 1fr; }
   .availability-grid { grid-template-columns: 1fr; }
   .layout { margin-top: .5rem; }
   nav { margin-left: 0; }

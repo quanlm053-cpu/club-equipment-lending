@@ -6,6 +6,21 @@
 
    Dùng chứng chỉ mà trình duyệt tin cậy. Với Caddy cục bộ, có thể dùng `caddy trust` để cài CA nội bộ khi tài khoản có quyền. Truy cập `https://localhost:8443/`.
 
+## Chạy thử Story #114
+
+1. Dùng môi trường demo theo hướng dẫn trên, áp dụng cả migration `004-loan-events.sql`. Với `demo.member`, tạo hai yêu cầu chồng giờ trên DEMO-01, một yêu cầu bắt đầu đúng lúc yêu cầu đầu kết thúc và một yêu cầu cùng giờ yêu cầu đầu trên DEMO-02.
+2. Với `demo.manager`, mở **Quản lý** (`/#management`). Kiểm tra thứ tự gửi cũ trước, mã yêu cầu, thiết bị, người gửi và giờ CLB. Mở **Chi tiết**, chọn **Duyệt** rồi **Hủy** để kiểm tra yêu cầu vẫn chờ. Xác nhận duyệt và kiểm tra chi tiết đổi thành **Đã duyệt**, hàng đợi bỏ dòng tương ứng.
+3. Để thử đồng thời, tạo lại bốn yêu cầu ở một ngày khác. Mở hàng đợi trong hai phiên quản lý và xác nhận duyệt hai yêu cầu chồng giờ trước khi một phiên nhận phản hồi. Kiểm tra một yêu cầu được duyệt, yêu cầu kia vẫn chờ và có cảnh báo xung đột. Từ chối yêu cầu còn chờ rồi duyệt hai yêu cầu sát biên và khác thiết bị.
+4. Chặn GET danh sách hoặc chi tiết trong công cụ mạng rồi bỏ chặn và bấm **Thử lại**. Khi POST bị lỗi sau lúc gửi, kiểm tra hai nút quyết định bị khóa trong lúc đối chiếu. Nếu lượt đọc lại lỗi, bỏ chặn và chọn **Tải lại trạng thái**. Kiểm tra trạng thái đã lưu trước khi xác nhận lệnh tiếp theo.
+5. Với tài khoản thành viên, mở thẳng `/#management` và `/#management/<id>` để kiểm tra thông báo thiếu quyền. Với phiên hết hạn, làm mới hàng đợi để kiểm tra ứng dụng đưa về màn hình đăng nhập.
+
+### Kết quả Task #144
+
+- Chạy `node --test frontend/test/management-session.test.cjs` từ thư mục gốc để kiểm tra hồi quy lỗi #162. Bài kiểm thử dùng API mô phỏng để điều khiển thứ tự phản hồi của POST và `/auth/me`.
+
+- Chrome headless chạy bản build qua HTTP loopback với API mô phỏng và dữ liệu tổng hợp. Đạt các ca tải, rỗng, lỗi đọc và thử lại, hiển thị qua ngày ở màn hình 360 px với múi giờ trình duyệt America/Los_Angeles, mở chi tiết, hủy xác nhận, khóa nút khi gửi, duyệt, từ chối, xung đột, đổi trạng thái ở phiên khác, mất phản hồi sau lưu kèm lỗi đọc lại, làm mới CSRF, hết phiên và chặn thành viên.
+- `npm run build`, `npm test` (3/3) và `git diff --check` đạt. Kết quả SQL Server do bộ điều phối cung cấp đạt 2/2 theo log `1794915430857494700-story-114-sqlserver.log`, gồm duyệt chồng giờ đồng thời, sát biên, khác thiết bị và hoàn tác khi ghi sự kiện lỗi. Môi trường này chưa có Caddy trên PATH nên lượt Chrome dùng HTTP loopback.
+
 ## Chạy thử Story #113
 
 1. Đăng nhập bằng `demo.member`. Mở **Yêu cầu của tôi** (`/#requests`) rồi chọn **Gửi yêu cầu** (`/#request/new`). Cũng có thể chọn **Gửi yêu cầu** ngay dưới một khung giờ trống. Liên kết từ lịch dùng các tham số `equipment_id`, `start_at`, `end_at` với hai mốc UTC từ API lịch. Biểu mẫu hiển thị và cho chỉnh lại theo giờ CLB (UTC+7).
