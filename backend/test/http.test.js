@@ -72,6 +72,7 @@ test('HTTP session, role checks, CSRF, expiry, revocation and login throttling',
   const sessions = new Map();
   const loan = { id: 12, equipment_id: 1, status: 'PENDING' };
   const otherLoan = { id: 15, equipment_id: 2, status: 'PENDING' };
+  let returnAudit;
   const store = {
     userByUsername: (username) => users.find((user) => user.username === username),
     createSession: (hash, id) => sessions.set(hash.toString('hex'), { id, expired: false }),
@@ -89,15 +90,23 @@ test('HTTP session, role checks, CSRF, expiry, revocation and login throttling',
     listLoanRequests: borrowerId => borrowerId === 1 ? [loan] : [otherLoan],
     readLoanRequest: (borrowerId, id) => borrowerId === 1 && id === loan.id ? loan : undefined,
     listManagedLoanRequests: status => [loan, otherLoan].filter(row => row.status === status),
-    readManagedLoanRequest: id => [loan, otherLoan].find(row => row.id === id),
+    readManagedLoanRequest(id) {
+      const row = [loan, otherLoan].find(row => row.id === id);
+      return row === loan && returnAudit ? { ...row, ...returnAudit } : row;
+    },
     decideLoanRequest(id, actorId, target) {
       assert.equal(actorId, 2);
       const request = [loan, otherLoan].find(row => row.id === id);
       if (!request) return { code: 'NOT_FOUND' };
-      const source = target === 'HANDED_OVER' ? 'APPROVED' : 'PENDING';
+      const source = { HANDED_OVER: 'APPROVED', RETURNED: 'HANDED_OVER' }[target] ?? 'PENDING';
       if (request.status !== source) return { code: 'INVALID_TRANSITION' };
       if (request === otherLoan && target === 'APPROVED') return { code: 'SCHEDULE_CONFLICT' };
       request.status = target;
+      if (target === 'RETURNED') {
+        const audit = { returned_by: actorId, returned_at: new Date(0).toISOString() };
+        returnAudit = { ...audit, returned_by_username: users[1].username };
+        return { loan: { ...request, ...audit } };
+      }
       return { loan: request };
     },
   };
@@ -210,6 +219,12 @@ test('HTTP session, role checks, CSRF, expiry, revocation and login throttling',
   await expectError(await decide('2147483648', 'handover', manager), 400, 'INVALID_REQUEST');
   await expectError(await decide(99, 'handover', manager), 404, 'NOT_FOUND');
   await expectError(await decide(12, 'handover', manager), 409, 'INVALID_TRANSITION');
+  await expectError(await decide(12, 'return', {}), 401, 'AUTH_REQUIRED');
+  await expectError(await decide(12, 'return', member), 403, 'FORBIDDEN');
+  await expectError(await decide(12, 'return', { Cookie: manager.Cookie }), 403, 'CSRF_INVALID');
+  await expectError(await decide('2147483648', 'return', manager), 400, 'INVALID_INPUT');
+  await expectError(await decide(99, 'return', manager), 404, 'NOT_FOUND');
+  await expectError(await decide(12, 'return', manager), 409, 'INVALID_TRANSITION');
   assert.deepEqual(await (await request(loanPath, { headers: manager })).json(), [saved, otherLoan]);
   const rejected = await decide(12, 'reject', manager);
   assert.equal(rejected.status, 200);
@@ -231,6 +246,22 @@ test('HTTP session, role checks, CSRF, expiry, revocation and login throttling',
   assert.deepEqual(await (await request(approvedPath, { headers: manager })).json(), []);
   assert.deepEqual(await (await request(approvedPath, { headers: member })).json(), [delivered]);
   await expectError(await decide(12, 'handover', manager), 409, 'INVALID_TRANSITION');
+
+  const handedOverPath = loanPath + '?status=HANDED_OVER';
+  assert.deepEqual(await (await request(handedOverPath, { headers: manager })).json(), [delivered]);
+  const returned = await decide(12, 'return', manager);
+  assert.equal(returned.status, 200);
+  const returnedLoan = { ...saved, status: 'RETURNED' };
+  const managedReturn = {
+    ...returnedLoan, returned_by: 2, returned_at: '1970-01-01T00:00:00.000Z',
+    returned_by_username: 'demo.manager',
+  };
+  assert.deepEqual(await returned.json(), managedReturn);
+  await expectError(await decide(12, 'return', manager), 409, 'INVALID_TRANSITION');
+  assert.deepEqual(await (await request(handedOverPath, { headers: manager })).json(), []);
+  assert.deepEqual(await (await request(handedOverPath, { headers: member })).json(), [returnedLoan]);
+  assert.deepEqual(await (await request(loanPath + '/12', { headers: manager })).json(), managedReturn);
+  assert.deepEqual(await (await request(loanPath + '/12', { headers: member })).json(), returnedLoan);
 
   const logout = await request('/auth/logout', { method: 'POST', headers: manager });
   assert.equal(logout.status, 204);

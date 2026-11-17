@@ -144,7 +144,9 @@ test('SQL Server migration, repeatable demo seed and session lifecycle through H
     const requestTwo = await serve(subtest, await createApp({
       store: sqlServerStore(otherPool, sql, schema), origin,
     }));
-    const managerTwo = await login(requestTwo, 'demo.manager', env.DEMO_MANAGER_PASSWORD);
+    await query(`INSERT INTO ${users} (username, role, password_hash)
+                 SELECT 'demo.manager.two', role, password_hash FROM ${users} WHERE username = 'demo.manager'`);
+    const managerTwo = await login(requestTwo, 'demo.manager.two', env.DEMO_MANAGER_PASSWORD);
     assert.equal(managerTwo.status, 200);
     const managerUser = await manager.json();
     const managerTwoUser = await managerTwo.json();
@@ -201,7 +203,7 @@ test('SQL Server migration, repeatable demo seed and session lifecycle through H
     assert.equal(overlapEvents.length, 1);
     const [event] = overlapEvents;
     assert.deepEqual([event.request_id, event.actor_id, event.from_status, event.to_status],
-      [winner.id, managerUser.id, 'PENDING', 'APPROVED']);
+      [winner.id, [managerUser, managerTwoUser][winnerIndex].id, 'PENDING', 'APPROVED']);
     assert.ok(event.occurred_at instanceof Date);
     await expectSlots(second.id, winner.start_at, winner.end_at, []);
     const rejected = await decide(loser, 'reject');
@@ -248,11 +250,13 @@ test('SQL Server migration, repeatable demo seed and session lifecycle through H
 
     const approvedQueue = async () => (await request(path + '?status=APPROVED', auth(manager))).json();
     assert.ok((await approvedQueue()).some(row => row.id === edgeLeft.id && row.status === 'APPROVED'));
-    // Simulate the persisted result of return (#116) for the earlier availability fixtures.
     await expectError(await decide(edgeLeft, 'handover'), 409, 'EQUIPMENT_IN_USE');
     assert.equal((await detail(edgeLeft)).status, 'APPROVED');
     assert.deepEqual((await history(edgeLeft)).map(row => row.to_status), ['APPROVED']);
-    await query(`UPDATE ${loans} SET status = 'RETURNED' WHERE status = 'HANDED_OVER'`);
+    const handedOverQueue = async () => (await request(path + '?status=HANDED_OVER', auth(manager))).json();
+    for (const fixture of await handedOverQueue()) {
+      assert.equal((await decide(fixture, 'return')).status, 200);
+    }
 
     await query(`ALTER TABLE ${events} ADD CONSTRAINT test_handover_failure
                  CHECK (request_id <> ${edgeLeft.id} OR to_status <> 'HANDED_OVER')`);
@@ -290,7 +294,7 @@ test('SQL Server migration, repeatable demo seed and session lifecycle through H
     assert.equal(deliveryEvents.length, 1);
     const [delivery] = deliveryEvents;
     assert.deepEqual([delivery.request_id, delivery.actor_id, delivery.from_status],
-      [delivered.id, managerUser.id, 'APPROVED']);
+      [delivered.id, [managerUser, managerTwoUser][deliveredIndex].id, 'APPROVED']);
     assert.ok(delivery.occurred_at >= before && delivery.occurred_at <= after);
     await assert.rejects(query(`UPDATE ${loans} SET status = 'HANDED_OVER' WHERE id = ${waiting.id}`),
       error => Number(error.number) === 2601);
@@ -301,8 +305,69 @@ test('SQL Server migration, repeatable demo seed and session lifecycle through H
     assert.deepEqual(duplicates.map(row => row.status).sort(), [200, 409]);
     await expectError(duplicates.find(row => row.status === 409), 409, 'INVALID_TRANSITION');
     assert.equal((await history(different)).filter(row => row.to_status === 'HANDED_OVER').length, 1);
-    await query(`UPDATE ${loans} SET status = 'RETURNED' WHERE id = ${delivered.id}`);
+    assert.ok((await handedOverQueue()).some(row => row.id === delivered.id));
+    await expectSlots(second.id, edgeLeft.start_at, edgeRight.end_at, []);
+    await query(`ALTER TABLE ${events} ADD CONSTRAINT test_return_failure
+                 CHECK (request_id <> ${delivered.id} OR to_status <> 'RETURNED')`);
+    try {
+      await expectError(await decide(delivered, 'return'), 500, 'INTERNAL_ERROR');
+      assert.equal((await detail(delivered)).status, 'HANDED_OVER');
+      assert.deepEqual((await history(delivered)).map(row => row.to_status), ['APPROVED', 'HANDED_OVER']);
+      await expectSlots(second.id, edgeLeft.start_at, edgeRight.end_at, []);
+      await expectError(await decide(waiting, 'handover', true), 409, 'EQUIPMENT_IN_USE');
+    } finally {
+      await query(`ALTER TABLE ${events} DROP CONSTRAINT test_return_failure`);
+    }
+
+    const beforeReturn = await utcNow();
+    const returns = await Promise.all([decide(delivered, 'return'), decide(delivered, 'return', true)]);
+    const afterReturn = await utcNow();
+    assert.deepEqual(returns.map(response => response.status).sort(), [200, 409]);
+    const returnedIndex = returns.findIndex(response => response.status === 200);
+    await expectError(returns[1 - returnedIndex], 409, 'INVALID_TRANSITION');
+    const receiver = [managerUser, managerTwoUser][returnedIndex];
+    const returnEvents = (await history(delivered)).filter(row => row.to_status === 'RETURNED');
+    assert.equal(returnEvents.length, 1);
+    const [returned] = returnEvents;
+    assert.deepEqual([returned.actor_id, returned.from_status], [receiver.id, 'HANDED_OVER']);
+    assert.ok(returned.occurred_at >= beforeReturn && returned.occurred_at <= afterReturn);
+    const returnAudit = {
+      returned_at: returned.occurred_at.toISOString(),
+      returned_by: receiver.id,
+      returned_by_username: receiver.username,
+    };
+    const memberReturn = { ...delivered, status: 'RETURNED' };
+    assert.deepEqual(await returns[returnedIndex].json(), { ...memberReturn, borrower_id: memberUser.id, ...returnAudit });
+    assert.deepEqual(await detail(delivered), {
+      ...memberReturn, borrower_id: memberUser.id, borrower_username: memberUser.username,
+      equipment_asset_code: second.asset_code, equipment_name: second.name, ...returnAudit,
+    });
+    assert.deepEqual(await detail(delivered, member), memberReturn);
+    assert.ok((await (await request(path, auth(member))).json())
+      .some(row => row.id === delivered.id && row.status === 'RETURNED'));
+    await expectError(await request(path + '/' + delivered.id, auth(other)), 404, 'NOT_FOUND');
+    assert.ok(!(await handedOverQueue()).some(row => row.id === delivered.id));
+    await expectSlots(second.id, edgeLeft.start_at, edgeRight.end_at, [[delivered.start_at, delivered.end_at]]);
     assert.equal((await decide(waiting, 'handover')).status, 200);
+
+    const next = await create(second, '19:00', '20:00');
+    assert.equal((await decide(next, 'approve')).status, 200);
+    const [returnWaiting, handoverNext] = await Promise.all([
+      decide(waiting, 'return'), decide(next, 'handover', true),
+    ]);
+    assert.equal(returnWaiting.status, 200);
+    assert.equal((await detail(waiting)).status, 'RETURNED');
+    if (handoverNext.status === 409) {
+      await expectError(handoverNext, 409, 'EQUIPMENT_IN_USE');
+      assert.equal((await detail(next)).status, 'APPROVED');
+      assert.equal((await decide(next, 'handover', true)).status, 200);
+    } else {
+      assert.equal(handoverNext.status, 200);
+    }
+    assert.equal((await detail(next)).status, 'HANDED_OVER');
+    for (const fixture of await handedOverQueue()) {
+      assert.equal((await decide(fixture, 'return')).status, 200);
+    }
 
     await requestTwo('/auth/logout', {
       method: 'POST', headers: { Cookie: cookie(managerTwo), 'X-CSRF-Token': managerTwoUser.csrf_token },
@@ -314,7 +379,6 @@ test('SQL Server migration, repeatable demo seed and session lifecycle through H
   await request('/auth/logout', {
     method: 'POST', headers: { Cookie: cookie(other), 'X-CSRF-Token': otherUser.csrf_token },
   });
-  await query(`UPDATE ${loans} SET status = 'RETURNED' WHERE status = 'HANDED_OVER'`);
   await expectSlots(first.id, at('02:00'), at('06:00'), [[at('03:00'), at('06:00')]]);
 
   const logout = await request('/auth/logout', {

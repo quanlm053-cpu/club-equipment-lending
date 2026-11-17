@@ -6,6 +6,23 @@
 
    Dùng chứng chỉ mà trình duyệt tin cậy. Với Caddy cục bộ, có thể dùng `caddy trust` để cài CA nội bộ khi tài khoản có quyền. Truy cập `https://localhost:8443/`.
 
+## Chạy thử Story #116
+
+1. Dùng môi trường demo theo hướng dẫn trên. Tạo hai lượt sát biên cho cùng thiết bị, duyệt cả hai, rồi giao lượt đầu. Thử giao lượt kế tiếp và kiểm tra cảnh báo thiết bị còn được giữ.
+2. Mở **Yêu cầu đã giao** (`/#management/handed-over`), bấm **Xác nhận nhận lại**, rồi chọn **Hủy** để kiểm tra tiêu điểm quay về nút mở. Mở lại và xác nhận. Kiểm tra lượt đã trả rời danh sách và chọn **Xem chi tiết** để xem **Đã trả**, người nhận và giờ CLB.
+3. Trong phiên thành viên, tải lại **Yêu cầu của tôi** và mở chi tiết. Kiểm tra **Đã trả** cùng giờ đặt gốc. Tra lịch cho khoảng đặt của cả hai lượt để thấy lượt đã trả được giải phóng và lượt đã duyệt vẫn giữ chỗ. Quay về phiên quản lý để giao lượt kế tiếp.
+
+Để kiểm tra bug #165, ghi lại mã YC của yêu cầu trên thẻ trước khi xác nhận. Sau khi xác nhận nhận lại, tải lại trang **Yêu cầu đã giao** trước khi mở liên kết trong thông báo. Nhập mã YC vào ô **Mã yêu cầu** và bấm **Tra cứu chi tiết**. Kiểm tra trạng thái **Đã trả**, người nhận và giờ nhận theo giờ CLB. Quản lý cũng có thể dán mã từ phiên trước. Tra cứu dùng API chi tiết, theo mã hiển thị trên thẻ.
+4. Mô phỏng mất phản hồi của lệnh nhận và chặn lần đọc chi tiết kế tiếp. Kiểm tra thao tác nhận vẫn bị khóa và có nút **Thử tải lại chi tiết**. Bỏ chặn và thử lại để xem kết quả đã lưu hoặc mở lại thao tác nếu lượt vẫn **Đã giao**. Nếu lệnh thành công nhưng tải danh sách lỗi, kiểm tra thông tin nhận vẫn hiện khi thử tải danh sách lại.
+5. Dùng phiên thành viên mở trực tiếp đường dẫn quản lý để kiểm tra thông báo thiếu quyền. Dùng phiên quản lý hết hạn để kiểm tra quy trình đăng nhập lại và tải trạng thái hiện hành.
+
+### Kiểm tra Task #157
+
+- `npm test` đạt 3/3 ca HTTP backend và 11/11 ca FE với DOM, mạng mô phỏng. Bộ FE kiểm tra hủy, khóa gửi lặp, CSRF, biên nhận theo giờ CLB, lỗi tải danh sách, xung đột, mất phản hồi, thử tải lại và chặn thành viên.
+- Chrome headless chạy bản build với API mô phỏng và dữ liệu tổng hợp. Đã xác minh tiêu điểm sau khi hủy, xác nhận nhận lại, tra cứu biên nhận và trạng thái **Đã trả** kèm giờ đặt gốc ở danh sách và chi tiết thành viên.
+- `npm run build` và `git diff --check` đều đạt.
+- Bộ điều phối đã chạy SQL Server trên checkout của Story #116, đạt 2/2 theo log `1794934031377062500-story-116-sqlserver.log`.
+
 ## Chạy thử Story #115
 
 1. Thiết lập môi trường demo như trên, áp dụng thêm migration `005-loan-request-active-holder.sql`. Dùng `demo.member` tạo hai yêu cầu sát biên cho cùng thiết bị. Dùng `demo.manager` duyệt cả hai.

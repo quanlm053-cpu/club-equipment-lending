@@ -120,8 +120,9 @@ export async function createApp({ store, origin, trustedProxyIp, routes = new Ma
   protectedRoutes.set('GET /loan-requests', {
     roles: loanRoles,
     async handle(_req, res, { user }, { query }) {
+      const status = query.get('status');
       const loans = user.role === 'MANAGER'
-        ? await store.listManagedLoanRequests(query.get('status') === 'APPROVED' ? 'APPROVED' : 'PENDING')
+        ? await store.listManagedLoanRequests(['APPROVED', 'HANDED_OVER'].includes(status) ? status : 'PENDING')
         : await store.listLoanRequests(user.id);
       json(res, 200, loans);
     },
@@ -143,10 +144,10 @@ export async function createApp({ store, origin, trustedProxyIp, routes = new Ma
     async handle(_req, res, { user }, { id, action }) {
       const requestId = loanRequestId(id);
       if (!requestId) return error(res, 400, action === 'handover' ? 'INVALID_REQUEST' : 'INVALID_INPUT');
-      const target = { approve: 'APPROVED', reject: 'REJECTED', handover: 'HANDED_OVER' }[action];
+      const target = { approve: 'APPROVED', reject: 'REJECTED', handover: 'HANDED_OVER', return: 'RETURNED' }[action];
       const { loan, code } = await store.decideLoanRequest(requestId, user.id, target);
       if (code) return error(res, code === 'NOT_FOUND' ? 404 : 409, code);
-      json(res, 200, loan);
+      json(res, 200, target === 'RETURNED' ? { ...loan, returned_by_username: user.username } : loan);
     },
   };
   const availabilityRoute = {
@@ -200,7 +201,7 @@ export async function createApp({ store, origin, trustedProxyIp, routes = new Ma
 
       const availability = /^GET \/equipment\/([^/]+)\/availability$/.exec(key);
       const loanDetail = /^GET \/loan-requests\/([^/]+)$/.exec(key);
-      const decision = /^POST \/loan-requests\/([^/]+)\/(approve|reject|handover)$/.exec(key);
+      const decision = /^POST \/loan-requests\/([^/]+)\/(approve|reject|handover|return)$/.exec(key);
       const route = availability ? availabilityRoute : loanDetail ? loanDetailRoute
         : decision ? loanDecisionRoute : protectedRoutes.get(key);
       if (!route) return error(res, 404, 'NOT_FOUND');
