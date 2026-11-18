@@ -12,7 +12,7 @@ npm test
 npm run build
 ```
 
-`npm test` kiểm tra API HTTP bằng dữ liệu tổng hợp, gồm phiên, phân quyền, tra cứu lịch, gửi và theo dõi yêu cầu mượn, hàng đợi quản lý, duyệt, từ chối, xác nhận giao và xác nhận nhận lại. Lệnh này cũng chạy kiểm thử frontend về quản lý phiên và xác nhận nhận lại với API mô phỏng. `npm run build` kiểm tra cú pháp JavaScript của ứng dụng và chép giao diện vào `dist/`. Workflow `lending-validation` chạy ba lệnh trên cho pull request với Node.js 26.
+`npm test` kiểm tra API HTTP bằng dữ liệu tổng hợp, gồm đăng ký thành viên, phiên, phân quyền, tra cứu lịch, gửi và theo dõi yêu cầu mượn, hàng đợi quản lý, duyệt, từ chối, xác nhận giao và xác nhận nhận lại. Lệnh này cũng chạy kiểm thử frontend về quản lý phiên và xác nhận nhận lại với API mô phỏng. `npm run build` kiểm tra cú pháp JavaScript của ứng dụng và chép giao diện vào `dist/`. Workflow `lending-validation` chạy ba lệnh trên cho pull request với Node.js 26.
 
 ## Chạy bản demo
 
@@ -43,10 +43,13 @@ npm run build
 
 ## Kiểm thử với SQL Server
 
+Với Story #166, mở [kịch bản đăng ký trên giao diện](frontend/README.md#chạy-thử-story-166) sau khi khởi động demo. Dùng tên đăng nhập tổng hợp chưa có trong database, đăng nhập thủ công sau khi tạo tài khoản và kiểm tra danh mục. Bộ kiểm thử SQL Server kiểm tra thêm trường vai trò gửi trực tiếp, đăng ký đồng thời với tên trùng, băm Argon2id và phản hồi `403` khi tài khoản mới gọi API quản lý.
+
 Đặt `TEST_DATABASE_URL` trỏ tới database riêng `ClubEquipmentLending_Test` với quyền tạo và xóa schema thử nghiệm. Nếu dùng ODBC, đặt `SQLSERVER_DRIVER=odbc`. Chạy `npm run test:sqlserver` từ thư mục gốc để kiểm tra migration, seed lặp lại, hai ID thiết bị, vòng đời phiên và lịch trống với dữ liệu tổng hợp cho từng trạng thái yêu cầu. Bài kiểm thử cũng gửi đồng thời hai yêu cầu trùng giờ, xác nhận cả hai được lưu với mã riêng ở trạng thái `PENDING` và kiểm tra truy cập từ thành viên khác. Bộ kiểm thử tự tạo và dọn fixture trong schema riêng. Dùng dữ liệu tổng hợp cho cả database demo và test.
 
 ## Xác minh SQL Server trên máy điều hành
 
+- Story #166 đạt 3/3 trên checkout tích hợp theo log `1794989572054110400-story-166-sqlserver.log` của bộ điều phối. Hai lượt đăng ký đồng thời cho cùng tên nhận một `201` và một `409`. Tài khoản được lưu với vai trò `MEMBER` và mật khẩu băm Argon2id, đăng nhập được và nhận `403` khi gọi API quản lý.
 - Story #116 đạt 2/2 theo log `1794934432913076600-story-116-sqlserver.log` của bộ điều phối. Các ca kiểm tra gồm xác nhận nhận lại đồng thời, hoàn tác khi ghi sự kiện lỗi, người nhận và thời điểm nhận, trạng thái thành viên, giải phóng lịch và giao lượt kế tiếp.
 - Story #115 đạt 2/2 theo log `1794917357493976400-story-115-sqlserver.log` của bộ điều phối. Bộ kiểm thử xác nhận giao đồng thời trên cùng thiết bị, trạng thái của lượt bị chặn và lượt đã giao khi thành viên đọc lại, người giao và thời điểm giao, cùng việc hoàn tác khi không ghi được sự kiện.
 - Story #114 đạt 2/2 trên cùng checkout theo log `1794915959443558300-story-114-sqlserver.log` của bộ điều phối. Bài kiểm thử qua HTTP xác nhận đúng một lượt duyệt thành công khi chồng giờ trên cùng thiết bị, lượt còn lại nhận `409 SCHEDULE_CONFLICT` và giữ `PENDING`. Các ca sát biên, khác thiết bị và hoàn tác khi ghi sự kiện lỗi đều đạt.

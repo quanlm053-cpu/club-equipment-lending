@@ -6,6 +6,20 @@
 
    Dùng chứng chỉ mà trình duyệt tin cậy. Với Caddy cục bộ, có thể dùng `caddy trust` để cài CA nội bộ khi tài khoản có quyền. Truy cập `https://localhost:8443/`.
 
+## Chạy thử Story #166
+
+1. Mở ứng dụng demo HTTPS khi chưa đăng nhập. Từ **Đăng nhập**, chọn **Đăng ký**. Gửi biểu mẫu trống, sau đó thử tên có dấu cách ở giữa hoặc mật khẩu ngắn. Kiểm tra lỗi cạnh trường và tiêu điểm ở trường lỗi đầu tiên.
+2. Đăng ký bằng tên tổng hợp chưa dùng, ví dụ `  DEMO.Member166  `, và mật khẩu tổng hợp đạt các quy tắc hiển thị. Kiểm tra trạng thái **Đang tạo tài khoản…** trong lúc gửi, sau đó kiểm tra **Đã tạo tài khoản** với tên `demo.member166`.
+3. Chọn **Về đăng nhập**. Kiểm tra tên đã điền và ô mật khẩu trống. Tự nhập mật khẩu để đăng nhập, kiểm tra danh mục tải và điều hướng chỉ hiển thị chức năng của thành viên.
+4. Đăng xuất rồi đăng ký lại cùng tên. Kiểm tra thông báo tên đã được sử dụng cạnh ô tên và sửa tên để thử lại. Dùng hồ sơ trình duyệt khác nếu cần kiểm tra hai lượt gửi đồng thời.
+5. Trong môi trường demo, mô phỏng mất phản hồi để kiểm tra hướng dẫn đăng nhập hoặc gửi lại. Mô phỏng phản hồi 429 có `Retry-After` để kiểm tra đếm ngược và mở lại nút gửi.
+
+### Kiểm tra Task #170
+
+- `npm test` đạt 16/16 ca, gồm 4 ca HTTP backend và 12 ca frontend hiện có. `npm run build` và `git diff --check` đều đạt.
+- Chrome headless chạy bản build với phản hồi API mô phỏng. Đã kiểm tra xác thực trường và tiêu điểm, khóa gửi lặp, phản hồi 201/400/403/409/429/500, mất mạng, xóa mật khẩu, đăng nhập thủ công, điều hướng theo vai trò và danh mục đang tải, có dữ liệu, lỗi, rỗng và hết phiên.
+- Bộ điều phối chạy bộ kiểm thử SQL Server trên checkout của Story #166 và báo đạt 3/3 theo log `1794988870540073400-story-166-sqlserver.log`. Ca đăng ký đồng thời xác nhận chỉ tạo một tài khoản thành viên và chặn API quản lý đối với tài khoản đó.
+
 ## Chạy thử Story #116
 
 1. Dùng môi trường demo theo hướng dẫn trên. Tạo hai lượt sát biên cho cùng thiết bị, duyệt cả hai, rồi giao lượt đầu. Thử giao lượt kế tiếp và kiểm tra cảnh báo thiết bị còn được giữ.

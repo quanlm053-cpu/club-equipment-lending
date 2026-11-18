@@ -39,6 +39,20 @@ export function sqlServerStore(pool, sql, schema) {
                         JOIN ${equipment} AS e ON e.id = r.equipment_id
                         JOIN ${users} AS u ON u.id = r.borrower_id`;
   return {
+    async createMember(username, passwordHash) {
+      try {
+        await pool.request().input('username', sql.NVarChar(255), username)
+          .input('hash', sql.VarChar(255), passwordHash)
+          .query(`INSERT INTO ${users} (username, password_hash, role)
+                  VALUES (@username, @hash, 'MEMBER')`);
+        return true;
+      } catch (error) {
+        // The insert supplies username as its only unique key. SQL Server generates id.
+        const number = Number(error.number ?? error.originalError?.info?.number);
+        if (number === 2601 || number === 2627) return false;
+        throw error;
+      }
+    },
     async userByUsername(username) {
       const result = await pool.request().input('username', sql.NVarChar(255), username)
         .query(`SELECT id, username, role, password_hash FROM ${users} WHERE username = @username`);

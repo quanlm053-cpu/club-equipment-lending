@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { test } from 'node:test';
 import { createApp } from '../app.js';
 import { connectDatabase, migrate, sqlServerStore, seedDemo } from '../database.js';
-import { cookie, expectError, login, origin, serve } from './helpers.js';
+import { cookie, expectError, login, origin, register, serve } from './helpers.js';
 
 test('SQL Server migration, repeatable demo seed and session lifecycle through HTTP', async (t) => {
   const connectionString = process.env.TEST_DATABASE_URL;
@@ -138,6 +138,61 @@ test('SQL Server migration, repeatable demo seed and session lifecycle through H
   await expectSlots(second.id, at('02:00'), at('06:00'), [[at('02:00'), at('06:00')]]);
   await expectError(await request(path + '/' + firstLoan.id, auth(other)), 404, 'NOT_FOUND');
   await expectError(await request(path + '/2147483647', auth(other)), 404, 'NOT_FOUND');
+  await t.test('concurrent registrations commit one member and enforce member permissions', async subtest => {
+    const { pool: otherPool } = await connectDatabase({ ...process.env, DATABASE_URL: connectionString });
+    subtest.after(() => otherPool.close());
+    const requestTwo = await serve(subtest, await createApp({
+      store: sqlServerStore(otherPool, sql, schema), origin,
+    }));
+    const password = '  Synthetic registration 😀  ';
+    for (const extra of [{ role: 'MANAGER' }, { extra: true }]) {
+      await expectError(await register(request, { username: 'blocked.member', password, ...extra }),
+        400, 'INVALID_INPUT');
+    }
+    for (const [username, alternative] of [
+      ['registered.exact', 'registered.exact'], ['registered.normalized', '  REGISTERED.Normalized  '],
+    ]) {
+      const responses = await Promise.all([
+        register(request, { username, password }),
+        register(requestTwo, { username: alternative, password }),
+      ]);
+      assert.deepEqual(responses.map(response => response.status).sort(), [201, 409]);
+      const created = responses.find(response => response.status === 201);
+      assert.equal(created.headers.get('set-cookie'), null);
+      assert.deepEqual(await created.json(), { username, role: 'MEMBER' });
+      await expectError(responses.find(response => response.status === 409), 409, 'USERNAME_TAKEN');
+    }
+    const { recordset: registered } = await query(`
+      SELECT username, role, password_hash FROM ${users}
+      WHERE username IN ('blocked.member', 'registered.exact', 'registered.normalized') ORDER BY username
+    `);
+    assert.deepEqual(registered.map(({ username, role }) => [username, role]), [
+      ['registered.exact', 'MEMBER'], ['registered.normalized', 'MEMBER'],
+    ]);
+    for (const row of registered) {
+      assert.match(row.password_hash, /^\$argon2id\$/);
+      assert.notEqual(row.password_hash, password);
+    }
+    await expectError(await login(requestTwo, 'registered.normalized', password.trim()), 401, 'INVALID_CREDENTIALS');
+    const signedIn = await login(requestTwo, 'registered.normalized', password);
+    assert.equal(signedIn.status, 200);
+    const session = await signedIn.json();
+    assert.equal(session.role, 'MEMBER');
+    assert.equal((await requestTwo('/equipment', auth(signedIn))).status, 200);
+    await expectError(await requestTwo(`${path}/${firstLoan.id}/approve`, {
+      method: 'POST',
+      headers: { ...auth(signedIn).headers, Origin: origin, 'X-CSRF-Token': session.csrf_token },
+    }), 403, 'FORBIDDEN');
+    assert.equal((await query(`SELECT status FROM ${loans} WHERE id = ${firstLoan.id}`)).recordset[0].status,
+      'PENDING');
+    assert.equal((await query(`SELECT COUNT(*) AS total FROM ${events} WHERE request_id = ${firstLoan.id}`))
+      .recordset[0].total, 0);
+    const logout = await requestTwo('/auth/logout', {
+      method: 'POST',
+      headers: { ...auth(signedIn).headers, 'X-CSRF-Token': session.csrf_token },
+    });
+    assert.equal(logout.status, 204);
+  });
   await t.test('manager decisions serialize overlaps and record committed transitions', async subtest => {
     const { pool: otherPool } = await connectDatabase({ ...process.env, DATABASE_URL: connectionString });
     subtest.after(() => otherPool.close());

@@ -1,3 +1,4 @@
+import { isUtf8 } from 'node:buffer';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
 import { availabilityInput, availableSlots, utcTime } from './availability.js';
@@ -42,8 +43,10 @@ async function readJson(req) {
     if (size > 8192) return;
     chunks.push(chunk);
   }
+  const body = Buffer.concat(chunks);
+  if (!isUtf8(body)) return;
   try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    return JSON.parse(body.toString('utf8'));
   } catch {
     return;
   }
@@ -54,6 +57,19 @@ async function credentials(req) {
   if (typeof input?.username !== 'string' || !input.username.trim() || input.username.length > 128 ||
       typeof input.password !== 'string' || !input.password || Buffer.byteLength(input.password) > 1024) return;
   return { username: input.username.trim().toLowerCase(), password: input.password };
+}
+
+async function registrationInput(req) {
+  const input = await readJson(req);
+  if (!input || Object.keys(input).length !== 2 ||
+      !Object.hasOwn(input, 'username') || !Object.hasOwn(input, 'password') ||
+      typeof input.username !== 'string' || input.username.length > 128 ||
+      typeof input.password !== 'string' || !input.password.isWellFormed() ||
+      Buffer.byteLength(input.password) > 1024 ||
+      !input.password.trim() || [...input.password].length < 12) return;
+  const username = input.username.trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9._-]{2,63}$/.test(username)) return;
+  return { username, password: input.password };
 }
 
 const validId = (id) => Number.isInteger(id) && id > 0 && id <= 2147483647;
@@ -68,7 +84,7 @@ function loanInput(input) {
   if (start && end && start < end) return { equipmentId: input.equipment_id, start, end };
 }
 
-function loginLimiter(now) {
+function authLimiter(now) {
   const windowMs = 60_000;
   let endsAt = 0;
   const counts = new Map();
@@ -85,13 +101,22 @@ function loginLimiter(now) {
   };
 }
 
+function clientAddress(req, trustedProxyIp) {
+  const peer = req.socket.remoteAddress;
+  const forwarded = req.headers['x-lending-client-ip'];
+  return peer === trustedProxyIp && typeof forwarded === 'string' && isIP(forwarded)
+    ? forwarded
+    : peer;
+}
+
 function identity(user, csrf) {
   return { id: user.id, username: user.username, role: user.role, csrf_token: csrf };
 }
 
 export async function createApp({ store, origin, trustedProxyIp, routes = new Map(), now = Date.now, logger = console }) {
   const dummyHash = await hashPassword(randomBytes(32).toString('base64url'));
-  const retryAfter = loginLimiter(now);
+  const loginRetryAfter = authLimiter(now);
+  const registerRetryAfter = authLimiter(now);
   const protectedRoutes = new Map(routes);
   protectedRoutes.set('GET /auth/me', {
     handle: (_req, res, session) => json(res, 200, session.user),
@@ -170,12 +195,7 @@ export async function createApp({ store, origin, trustedProxyIp, routes = new Ma
 
   async function login(req, res) {
     if (req.headers.origin !== origin) return error(res, 403, 'ORIGIN_FORBIDDEN');
-    const peer = req.socket.remoteAddress;
-    const forwarded = req.headers['x-lending-client-ip'];
-    const address = peer === trustedProxyIp && typeof forwarded === 'string' && isIP(forwarded)
-      ? forwarded
-      : peer;
-    const seconds = retryAfter(address);
+    const seconds = loginRetryAfter(clientAddress(req, trustedProxyIp));
     if (seconds) {
       res.setHeader('Retry-After', seconds);
       return error(res, 429, 'LOGIN_RATE_LIMITED');
@@ -192,12 +212,29 @@ export async function createApp({ store, origin, trustedProxyIp, routes = new Ma
     json(res, 200, identity(user, csrfToken(token)));
   }
 
+  async function register(req, res) {
+    if (req.headers.origin !== origin) return error(res, 403, 'ORIGIN_FORBIDDEN');
+    const seconds = registerRetryAfter(clientAddress(req, trustedProxyIp));
+    if (seconds) {
+      res.setHeader('Retry-After', seconds);
+      return error(res, 429, 'REGISTER_RATE_LIMITED');
+    }
+    const input = await registrationInput(req);
+    if (!input) return error(res, 400, 'INVALID_INPUT');
+    const { username, password } = input;
+    if (!await store.createMember(username, await hashPassword(password))) {
+      return error(res, 409, 'USERNAME_TAKEN');
+    }
+    json(res, 201, { username, role: 'MEMBER' });
+  }
+
   return async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     try {
       const { pathname, searchParams } = new URL(req.url, origin);
       const key = req.method + ' ' + pathname;
       if (key === 'POST /auth/login') return await login(req, res);
+      if (key === 'POST /auth/register') return await register(req, res);
 
       const availability = /^GET \/equipment\/([^/]+)\/availability$/.exec(key);
       const loanDetail = /^GET \/loan-requests\/([^/]+)$/.exec(key);

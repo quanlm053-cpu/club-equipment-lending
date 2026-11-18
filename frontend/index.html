@@ -36,13 +36,44 @@
           <label for="password">Mật khẩu</label>
           <input id="password" type="password" autocomplete="current-password" required>
           <p id="login-status" role="status"></p>
-          <button class="primary" id="submit" type="submit">Đăng nhập</button>
+          <div class="actions">
+            <button class="primary" id="submit" type="submit">Đăng nhập</button>
+            <a href="#register" id="open-register">Đăng ký</a>
+          </div>
         </form>
         <h2 class="demo-heading">Tài khoản mẫu</h2>
         <div class="actions">
           <button type="button" data-demo="demo.member">Điền tên thành viên</button>
           <button type="button" data-demo="demo.manager">Điền tên quản lý</button>
         </div>
+      </section>
+      <section id="register" aria-labelledby="register-title" hidden>
+        <h1 id="register-title" tabindex="-1">Đăng ký tài khoản</h1>
+        <form id="register-form" method="post" novalidate>
+          <fieldset id="register-fields">
+            <label for="register-name">Tên đăng nhập</label>
+            <input id="register-name" autocomplete="username" autocapitalize="none" spellcheck="false"
+              aria-describedby="register-name-hint register-name-error" required>
+            <p id="register-name-hint" class="muted">3–64 ký tự sau khi bỏ khoảng trắng ở hai đầu, tối đa 128 ký tự UTF-16 khi nhập. Bắt đầu bằng chữ cái ASCII hoặc số. Có thể dùng dấu chấm, gạch dưới và gạch ngang ở các vị trí tiếp theo.</p>
+            <p id="register-name-error" role="alert"></p>
+            <label for="register-password">Mật khẩu</label>
+            <input id="register-password" type="password" autocomplete="new-password"
+              aria-describedby="register-password-hint register-password-error" required>
+            <p id="register-password-hint" class="muted">Ít nhất 12 điểm mã Unicode, tối đa 1.024 byte UTF-8 và có ít nhất một ký tự khác khoảng trắng.</p>
+            <p id="register-password-error" role="alert"></p>
+          </fieldset>
+          <p id="register-status" role="status"></p>
+          <p id="register-error" role="alert"></p>
+          <div class="actions">
+            <button class="primary" id="register-submit" type="submit">Tạo tài khoản</button>
+            <a href="#login">Về đăng nhập</a>
+          </div>
+        </form>
+      </section>
+      <section id="register-success" aria-labelledby="register-success-title" hidden>
+        <h1 id="register-success-title" tabindex="-1">Đã tạo tài khoản</h1>
+        <p>Tài khoản <strong id="created-name"></strong> đã sẵn sàng. Hãy đăng nhập bằng mật khẩu vừa tạo.</p>
+        <a href="#login">Về đăng nhập</a>
       </section>
       <section id="equipment" aria-labelledby="equipment-title" hidden>
         <h1 id="equipment-title" tabindex="-1">Danh mục thiết bị</h1>
