@@ -43,12 +43,15 @@ npm run build
 
 ## Kiểm thử với SQL Server
 
+Với Story #176, chạy theo [kịch bản đăng ký](frontend/README.md#chạy-thử-story-176) sau khi khởi động demo. Dùng tên đăng nhập tổng hợp mới và nhập `abcdef😀` để thấy lỗi 7 điểm mã. Trên cùng biểu mẫu, đổi thành `abcdefg😀`, tạo tài khoản rồi quay về màn đăng nhập, đăng nhập thủ công và mở danh mục thiết bị. Dùng tài khoản `demo.member` đã có để kiểm tra lại đăng nhập bằng mật khẩu cũ.
+
 Với Story #166, mở [kịch bản đăng ký trên giao diện](frontend/README.md#chạy-thử-story-166) sau khi khởi động demo. Dùng tên đăng nhập tổng hợp chưa có trong database, đăng nhập thủ công sau khi tạo tài khoản và kiểm tra danh mục. Bộ kiểm thử SQL Server kiểm tra thêm trường vai trò gửi trực tiếp, đăng ký đồng thời với tên trùng, băm Argon2id và phản hồi `403` khi tài khoản mới gọi API quản lý.
 
 Đặt `TEST_DATABASE_URL` trỏ tới database riêng `ClubEquipmentLending_Test` với quyền tạo và xóa schema thử nghiệm. Nếu dùng ODBC, đặt `SQLSERVER_DRIVER=odbc`. Chạy `npm run test:sqlserver` từ thư mục gốc để kiểm tra migration, seed lặp lại, hai ID thiết bị, vòng đời phiên và lịch trống với dữ liệu tổng hợp cho từng trạng thái yêu cầu. Bài kiểm thử cũng gửi đồng thời hai yêu cầu trùng giờ, xác nhận cả hai được lưu với mã riêng ở trạng thái `PENDING` và kiểm tra truy cập từ thành viên khác. Bộ kiểm thử tự tạo và dọn fixture trong schema riêng. Dùng dữ liệu tổng hợp cho cả database demo và test.
 
 ## Xác minh SQL Server trên máy điều hành
 
+- Story #176 đạt 3/3 theo log `1795032442695776100-story-176-sqlserver.log`. Bài API xác nhận mật khẩu 7 điểm mã trả `400 INVALID_INPUT` và không tạo tài khoản. Mật khẩu 8 điểm mã có emoji tạo được tài khoản `MEMBER` với băm Argon2id. Log `1795032439425704600-story-176-browser/browser.log` và ba ảnh cùng thư mục ghi nhận lỗi 7 điểm mã, xác nhận tạo tài khoản sau khi sửa thành 8 điểm mã và danh mục sau khi đăng nhập thủ công. Bộ điều phối chạy trình duyệt với API thật và schema SQL Server kiểm thử riêng dùng dữ liệu tổng hợp.
 - Story #166 đạt 3/3 trên checkout tích hợp theo log `1794989572054110400-story-166-sqlserver.log` của bộ điều phối. Hai lượt đăng ký đồng thời cho cùng tên nhận một `201` và một `409`. Tài khoản được lưu với vai trò `MEMBER` và mật khẩu băm Argon2id, đăng nhập được và nhận `403` khi gọi API quản lý.
 - Story #116 đạt 2/2 theo log `1794934432913076600-story-116-sqlserver.log` của bộ điều phối. Các ca kiểm tra gồm xác nhận nhận lại đồng thời, hoàn tác khi ghi sự kiện lỗi, người nhận và thời điểm nhận, trạng thái thành viên, giải phóng lịch và giao lượt kế tiếp.
 - Story #115 đạt 2/2 theo log `1794917357493976400-story-115-sqlserver.log` của bộ điều phối. Bộ kiểm thử xác nhận giao đồng thời trên cùng thiết bị, trạng thái của lượt bị chặn và lượt đã giao khi thành viên đọc lại, người giao và thời điểm giao, cùng việc hoàn tác khi không ghi được sự kiện.

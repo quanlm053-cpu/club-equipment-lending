@@ -6,6 +6,19 @@
 
    Dùng chứng chỉ mà trình duyệt tin cậy. Với Caddy cục bộ, có thể dùng `caddy trust` để cài CA nội bộ khi tài khoản có quyền. Truy cập `https://localhost:8443/`.
 
+## Chạy thử Story #176
+
+1. Dùng môi trường HTTPS và dữ liệu SQL Server tổng hợp theo hướng dẫn trên. Từ **Đăng nhập**, chọn **Đăng ký** và nhập tên mới, ví dụ `demo.member176` (thêm hậu tố khi chạy lại).
+2. Gửi với `abc123😀` (7 điểm mã). Kiểm tra lỗi **Mật khẩu phải có ít nhất 8 ký tự** cạnh trường mật khẩu. Sửa thành `abc1234😀` (8 điểm mã) và gửi lại. Kiểm tra xác nhận **Đã tạo tài khoản**.
+3. Chọn **Về đăng nhập**. Kiểm tra tên đã điền và ô mật khẩu trống. Tự nhập mật khẩu vừa tạo, đăng nhập rồi mở **Danh mục thiết bị** để xem thiết bị demo.
+
+### Kiểm tra Task #180
+
+- `npm test` đạt 17/17 ca. Ca frontend dùng DOM và API mô phỏng để kiểm tra biên 7/8 điểm mã với emoji, Unicode không hợp lệ, giới hạn byte và luồng đăng nhập thủ công vào danh mục.
+- `npm run build` và `git diff --check` đạt. Bài SQL Server của bộ điều phối đạt 3/3 theo log `1795032354730358100-story-176-sqlserver.log`. Bài kiểm tra đăng ký xác nhận API từ chối 7 điểm mã và không tạo tài khoản, chấp nhận 8 điểm mã có emoji, lưu băm Argon2id, xử lý đăng ký trùng đồng thời và kiểm tra quyền thành viên.
+- Log `1795032351431363100-story-176-browser/browser.log` xác nhận trình duyệt chạy với API thật và schema SQL Server riêng dùng dữ liệu tổng hợp. Bài chạy ghi nhận lỗi ở 7 điểm mã rồi sửa thành đúng 8 điểm mã có emoji trên cùng biểu mẫu. Tài khoản thành viên được tạo, phản hồi đăng ký không cấp cookie phiên và người dùng đăng nhập thủ công để mở danh mục.
+- Cùng thư mục log trình duyệt có ba ảnh `short-password-error.png`, `registered.png` và `catalog.png`. Bài chạy cũng kiểm tra biểu mẫu trống, tên trùng và thử lại sau lỗi mạng.
+
 ## Chạy thử Story #166
 
 1. Mở ứng dụng demo HTTPS khi chưa đăng nhập. Từ **Đăng nhập**, chọn **Đăng ký**. Gửi biểu mẫu trống, sau đó thử tên có dấu cách ở giữa hoặc mật khẩu ngắn. Kiểm tra lỗi cạnh trường và tiêu điểm ở trường lỗi đầu tiên.

@@ -208,6 +208,18 @@ function showRegistration() {
   if (!registrationRequest) updateRegistrationRetry();
 }
 
+function registrationPasswordError(password) {
+  if (!password) return 'Vui lòng nhập mật khẩu.';
+  const codePoints = [...password];
+  if (codePoints.some(point => /^[\uD800-\uDFFF]$/.test(point))) {
+    return 'Mật khẩu chứa ký tự Unicode không hợp lệ.';
+  }
+  if (!password.trim()) return 'Mật khẩu phải có ít nhất một ký tự khác khoảng trắng.';
+  if (codePoints.length < 8) return 'Mật khẩu phải có ít nhất 8 ký tự';
+  if (new TextEncoder().encode(password).length > 1024) return 'Mật khẩu vượt quá 1.024 byte UTF-8.';
+  return '';
+}
+
 async function submitRegistration(event) {
   event.preventDefault();
   const submit = byId('register-submit');
@@ -220,9 +232,7 @@ async function submitRegistration(event) {
   const nameError = !username.trim() ? 'Vui lòng nhập tên đăng nhập.'
     : username.length > 128 || !/^[a-z0-9][a-z0-9._-]{2,63}$/.test(username.trim().toLowerCase())
       ? 'Tên đăng nhập chưa đúng định dạng.' : '';
-  const passwordError = !password ? 'Vui lòng nhập mật khẩu.'
-    : !password.trim() || [...password].length < 12 || new TextEncoder().encode(password).length > 1024
-      ? 'Mật khẩu chưa đáp ứng quy tắc.' : '';
+  const passwordError = registrationPasswordError(password);
   fieldError(nameInput, nameError);
   fieldError(passwordInput, passwordError);
   message('register-error', '');
