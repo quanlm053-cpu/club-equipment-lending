@@ -3,7 +3,97 @@ import { randomBytes } from 'node:crypto';
 import { test } from 'node:test';
 import { createApp } from '../app.js';
 import { hashPassword } from '../password.js';
-import { cookie, expectError, login, origin, serve } from './helpers.js';
+import { cookie, expectError, login, origin, register, serve } from './helpers.js';
+
+test('registration validates input, hashes passwords and applies its own IP limit', async (t) => {
+  let time = 0;
+  const members = new Map();
+  const sessions = new Map();
+  const logged = [];
+  const store = {
+    createMember(username, password_hash) {
+      if (username === 'write-failure') throw Object.assign(new Error('synthetic detail'), { code: 'EREQUEST' });
+      if (members.has(username)) return false;
+      members.set(username, { id: members.size + 1, username, password_hash, role: 'MEMBER' });
+      return true;
+    },
+    userByUsername: (username) => members.get(username),
+    createSession: (hash, id) => sessions.set(hash.toString('hex'), id),
+    userBySession: (hash) => [...members.values()].find(({ id }) => id === sessions.get(hash.toString('hex'))),
+    listEquipment: () => [{ id: 1, asset_code: 'DEMO-01', name: 'Synthetic equipment' }],
+  };
+  const request = await serve(t, await createApp({
+    store, origin, now: () => time, logger: { error: (...args) => logged.push(args) },
+  }));
+  const input = { username: '  ABC  ', password: '😀'.repeat(12) };
+  const invalidUtf8 = Buffer.concat([
+    Buffer.from('{"username":"demo.invalidutf8","password":"abcdefghijk'),
+    Buffer.from([0xff]),
+    Buffer.from('"}'),
+  ]);
+  await expectError(await request('/auth/register', {
+    method: 'POST',
+    headers: { Origin: origin, 'Content-Type': 'application/json' },
+    body: invalidUtf8,
+  }), 400, 'INVALID_INPUT');
+  assert.equal(members.size, 0);
+  time += 60_000;
+  await expectError(await register(request, input, { Origin: '' }), 403, 'ORIGIN_FORBIDDEN');
+  await expectError(await register(request, input, { Origin: 'https://other.example.test' }), 403, 'ORIGIN_FORBIDDEN');
+  for (const invalid of [
+    { password: input.password }, { username: 'missing-password' },
+    { ...input, role: 'MANAGER' }, { ...input, extra: true },
+    { ...input, username: 123 }, { ...input, password: 123 },
+    { ...input, username: '.bad' }, { ...input, username: 'a'.repeat(65) },
+    { ...input, username: 'ab' }, { ...input, username: 'a'.padStart(127) + 'bc' },
+    { ...input, password: '😀'.repeat(11) }, { ...input, password: ' '.repeat(12) },
+    { ...input, password: 'abcdefghijk\uD800' }, { ...input, password: 'abcdefghijk\uDC00' },
+    { ...input, password: '😀'.repeat(257) },
+  ]) {
+    await expectError(await register(request, invalid), 400, 'INVALID_INPUT');
+    time += 60_000;
+  }
+  await expectError(await register(request, input, { 'Content-Type': 'text/plain' }), 400, 'INVALID_INPUT');
+  for (const body of ['{', ' '.repeat(8193) + JSON.stringify(input)]) {
+    await expectError(await request('/auth/register', {
+      method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body,
+    }), 400, 'INVALID_INPUT');
+  }
+  assert.equal(members.size, 0);
+
+  const created = await register(request, input);
+  assert.equal(created.status, 201);
+  assert.equal(created.headers.get('cache-control'), 'no-store');
+  assert.equal(created.headers.get('set-cookie'), null);
+  assert.deepEqual(await created.json(), { username: 'abc', role: 'MEMBER' });
+  assert.match(members.get('abc').password_hash, /^\$argon2id\$/);
+  await expectError(await register(request, input), 409, 'USERNAME_TAKEN');
+  assert.equal((await register(request, {
+    username: ' '.repeat(64) + 'A'.repeat(64), password: '😀'.repeat(256),
+  })).status, 201);
+  await expectError(await register(request, { ...input, username: 'write-failure' }), 500, 'INTERNAL_ERROR');
+  assert.deepEqual(logged, [['Lending API request failed', 'EREQUEST']]);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await expectError(await register(request, {}), 400, 'INVALID_INPUT');
+  }
+  const limited = await register(request, input, { 'X-Lending-Client-IP': '192.0.2.1' });
+  await expectError(limited, 429, 'REGISTER_RATE_LIMITED');
+  assert.equal(limited.headers.get('retry-after'), '60');
+  await expectError(await request('/equipment'), 401, 'AUTH_REQUIRED');
+  const signedIn = await login(request, 'abc', input.password);
+  assert.equal(signedIn.status, 200);
+  const session = await signedIn.json();
+  assert.equal(session.role, 'MEMBER');
+  const headers = { Cookie: cookie(signedIn) };
+  const catalog = await request('/equipment', { headers });
+  assert.equal(catalog.status, 200);
+  assert.deepEqual(await catalog.json(), store.listEquipment());
+  await expectError(await request('/loan-requests/1/approve', {
+    method: 'POST', headers: { ...headers, Origin: origin, 'X-CSRF-Token': session.csrf_token },
+  }), 403, 'FORBIDDEN');
+  time += 60_000;
+  assert.equal((await register(request, { ...input, username: 'after-limit' })).status, 201);
+});
 
 test('availability validates input after authorization and maps store results', async (t) => {
   let role = 'MEMBER';

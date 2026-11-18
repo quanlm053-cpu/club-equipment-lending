@@ -29,7 +29,9 @@ a { color: #165d46; }
 #availability-title { margin-top: .7rem; }
 .availability-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); align-items: start; }
 .availability-card { padding: 1rem; border: 1px solid #cbd8d1; border-radius: 10px; overflow-wrap: anywhere; }
-#lookup-fields, #request-fields { margin: 0; padding: 0; border: 0; min-width: 0; }
+#lookup-fields, #request-fields, #register-fields { margin: 0; padding: 0; border: 0; min-width: 0; }
+#register-form input { margin-bottom: .25rem; }
+#register-form p { font-size: .9rem; }
 #device, #request-device { width: 100%; font: inherit; color: inherit; background: white; border: 1px solid #718b80; border-radius: 8px; padding: .53rem .75rem; }
 #lookup input { min-width: 0; margin-bottom: .25rem; }
 #lookup small { display: block; }

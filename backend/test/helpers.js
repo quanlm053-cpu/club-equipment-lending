@@ -11,6 +11,11 @@ export async function serve(t, app) {
 }
 
 export const origin = 'https://lending.example.test';
+export const register = (request, input, headers = {}) => request('/auth/register', {
+  method: 'POST',
+  headers: { Origin: origin, 'Content-Type': 'application/json', ...headers },
+  body: JSON.stringify(input),
+});
 export const login = (request, username, password, site = origin) => request('/auth/login', {
   method: 'POST',
   headers: { Origin: site, 'Content-Type': 'application/json' },

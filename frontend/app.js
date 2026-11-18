@@ -1,5 +1,5 @@
 const byId = (id) => document.getElementById(id);
-const screens = ['session', 'login', 'equipment', 'availability', 'management',
+const screens = ['session', 'login', 'register', 'register-success', 'equipment', 'availability', 'management',
   'requests', 'request-new', 'request-detail'];
 const device = byId('device');
 const fromInput = byId('from');
@@ -23,6 +23,9 @@ let sessionVerification;
 let loggingOut = false;
 let loanView;
 let loanLoginRoute;
+let registrationRequest;
+let registrationRetryAt = 0;
+let registrationTimer;
 
 class ApiError extends Error {
   constructor(response, code) {
@@ -47,6 +50,8 @@ function message(id, text, error = false) {
 }
 
 function show(screen) {
+  if (screen !== 'register' && byId('register').hidden === false) resetRegistration();
+  if (screen !== 'register-success') byId('created-name').textContent = '';
   loanView?.abort();
   managementView?.read?.abort();
   for (const [id, decision] of managementDecisions) {
@@ -169,6 +174,114 @@ async function loadCatalog(selectedId) {
 function fieldError(input, text = '') {
   message(input.id + '-error', text, Boolean(text));
   input.setAttribute('aria-invalid', String(Boolean(text)));
+}
+
+function resetRegistration() {
+  registrationRequest?.abort();
+  registrationRequest = undefined;
+  clearTimeout(registrationTimer);
+  byId('register-form').reset();
+  byId('register-fields').disabled = false;
+  fieldError(byId('register-name'));
+  fieldError(byId('register-password'));
+  message('register-status', '');
+  message('register-error', '');
+}
+
+function updateRegistrationRetry() {
+  const seconds = Math.ceil((registrationRetryAt - Date.now()) / 1000);
+  byId('register-submit').disabled = seconds > 0;
+  if (seconds <= 0) {
+    if (registrationRetryAt) message('register-status', 'Bạn có thể gửi lại.');
+    registrationRetryAt = 0;
+    return;
+  }
+  message('register-status', 'Quá nhiều lượt đăng ký. Hãy thử lại sau ' + seconds + ' giây.');
+  registrationTimer = setTimeout(updateRegistrationRetry, 1000);
+}
+
+function showRegistration() {
+  byId('password').value = '';
+  message('login-status', '');
+  show('register');
+  clearTimeout(registrationTimer);
+  if (!registrationRequest) updateRegistrationRetry();
+}
+
+async function submitRegistration(event) {
+  event.preventDefault();
+  const submit = byId('register-submit');
+  if (byId('register').hidden || location.hash !== '#register' || submit.disabled) return;
+
+  const nameInput = byId('register-name');
+  const passwordInput = byId('register-password');
+  const username = nameInput.value;
+  const password = passwordInput.value;
+  const nameError = !username.trim() ? 'Vui lòng nhập tên đăng nhập.'
+    : username.length > 128 || !/^[a-z0-9][a-z0-9._-]{2,63}$/.test(username.trim().toLowerCase())
+      ? 'Tên đăng nhập chưa đúng định dạng.' : '';
+  const passwordError = !password ? 'Vui lòng nhập mật khẩu.'
+    : !password.trim() || [...password].length < 12 || new TextEncoder().encode(password).length > 1024
+      ? 'Mật khẩu chưa đáp ứng quy tắc.' : '';
+  fieldError(nameInput, nameError);
+  fieldError(passwordInput, passwordError);
+  message('register-error', '');
+  if (nameError || passwordError) {
+    (nameError ? nameInput : passwordInput).focus();
+    return;
+  }
+
+  const request = new AbortController();
+  registrationRequest = request;
+  const fields = byId('register-fields');
+  fields.disabled = true;
+  submit.disabled = true;
+  message('register-status', 'Đang tạo tài khoản…');
+  let focusName = false;
+  try {
+    const created = await api('/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+      signal: AbortSignal.any([request.signal, AbortSignal.timeout(15000)]),
+    });
+    if (request.signal.aborted || location.hash !== '#register') return;
+    byId('username').value = created.username;
+    byId('password').value = '';
+    byId('created-name').textContent = created.username;
+    loanLoginRoute = undefined;
+    history.replaceState(null, '', '#register/success');
+    show('register-success');
+  } catch (error) {
+    if (request.signal.aborted || location.hash !== '#register') return;
+    switch (error.message) {
+      case 'INVALID_INPUT':
+        message('register-error', 'Thông tin đăng ký chưa hợp lệ. Hãy kiểm tra và thử lại.', true);
+        break;
+      case 'ORIGIN_FORBIDDEN':
+        message('register-error', 'Không thể gửi đăng ký từ trang này. Hãy mở lại trang đăng nhập của CLB.', true);
+        break;
+      case 'USERNAME_TAKEN':
+        fieldError(nameInput, 'Tên đăng nhập đã được sử dụng.');
+        focusName = true;
+        break;
+      case 'REGISTER_RATE_LIMITED':
+        registrationRetryAt = Date.now() + 1000 * (error.retryAfter > 0 ? error.retryAfter : 60);
+        break;
+      default:
+        message('register-error', error instanceof TypeError || error.name === 'TimeoutError'
+          ? 'Chưa xác định tài khoản đã được tạo. Bạn có thể thử đăng nhập hoặc gửi lại.'
+          : 'Chưa thể tạo tài khoản. Hãy thử lại.', true);
+    }
+  } finally {
+    if (registrationRequest === request) {
+      registrationRequest = undefined;
+      fields.disabled = false;
+      message('register-status', '');
+      updateRegistrationRetry();
+      if (focusName) nameInput.focus();
+    }
+  }
 }
 
 function clearAvailability(text = '') {
@@ -960,6 +1073,7 @@ async function checkSession() {
     if (error.status === 401) {
       verified = true;
       if (previous) expired();
+      else if (location.hash === '#register') showRegistration();
       else {
         if (isLoanRoute(location.hash) || isManagementRoute(location.hash)) loanLoginRoute = location.hash;
         endSession((loanLoginRoute || ['#equipment', '#management'].includes(location.hash) || location.hash.startsWith('#availability/'))
@@ -1087,6 +1201,11 @@ byId('lookup').addEventListener('input', () => {
   clearAvailability('Lựa chọn đã thay đổi. Xem lịch trống để cập nhật.');
 });
 byId('logout').addEventListener('click', logout);
+byId('register-form').addEventListener('submit', submitRegistration);
+byId('register-form').addEventListener('input', (event) => {
+  fieldError(event.target);
+  message('register-error', '');
+});
 byId('request-form').addEventListener('submit', submitLoan);
 byId('request-form').addEventListener('input', (event) => fieldError(event.target));
 byId('request-catalog-retry').addEventListener('click', () => {
@@ -1094,9 +1213,12 @@ byId('request-catalog-retry').addEventListener('click', () => {
   void loadLoanCatalog(loanView, loanDevice.value || (!loanDevice.options.length && params.get('equipment_id')) || '');
 });
 window.addEventListener('hashchange', () => {
-  if (checkingSession) return;
+  if (checkingSession || byId('session').hidden === false) return;
   if (user) showBusinessScreen();
-  else if (!byId('login').hidden && !byId('submit').disabled) {
+  else if (byId('submit').disabled) history.replaceState(null, '', '#login');
+  else if (location.hash === '#register') showRegistration();
+  else if (location.hash === '#login') endSession();
+  else if (location.hash !== '#register/success' || byId('register-success').hidden) {
     if (isLoanRoute(location.hash) || isManagementRoute(location.hash)) loanLoginRoute = location.hash;
     endSession('Vui lòng đăng nhập để tiếp tục.');
   }

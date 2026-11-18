@@ -11,6 +11,25 @@ Cần Node.js 26 trở lên và một cơ sở dữ liệu Microsoft SQL Server.
 
 ## Tích hợp FE
 
+### Đăng ký thành viên Story #166
+
+Gửi `POST /auth/register` cùng origin HTTPS với `Content-Type: application/json` và đúng hai khóa `username`, `password`. Giới hạn JSON là 8.192 byte. Gửi tên gốc để máy chủ kiểm tra tối đa 128 đơn vị UTF-16 rồi chuẩn hóa bằng `trim().toLowerCase()`. Tên chuẩn dài 3–64 ký tự, bắt đầu bằng chữ ASCII hoặc số, các ký tự tiếp theo có thể thêm `.`, `_` và `-`. Mật khẩu giữ nguyên, cần ít nhất 12 điểm mã Unicode, tối đa 1.024 byte UTF-8 và có ít nhất một ký tự khác khoảng trắng.
+
+`201` trả `{ "username": "demo.member166", "role": "MEMBER" }` và `Cache-Control: no-store`. Hiển thị xác nhận, xóa mật khẩu và dùng tên trả về để điền sẵn khi khách quay lại đăng nhập. Khách tự gửi `POST /auth/login` để nhận cookie phiên rồi mở `GET /equipment`.
+
+| Phản hồi | Xử lý trên FE |
+| --- | --- |
+| `400 INVALID_INPUT` | Báo dữ liệu đăng ký sai. Xác định lỗi từng trường theo các quy tắc trên. |
+| `403 ORIGIN_FORBIDDEN` | Hướng khách mở trang đăng nhập qua origin của CLB. |
+| `409 USERNAME_TAKEN` | Báo trùng cạnh trường tên và cho sửa. |
+| `429 REGISTER_RATE_LIMITED` | Đọc `Retry-After` theo giây. Đăng ký có hạn mức riêng 10 lượt/IP/phút trên mỗi tiến trình. |
+| `500 INTERNAL_ERROR` | Báo lỗi tạm thời và cho gửi lại. |
+| Mất phản hồi | Báo kết quả chưa xác định. Cho thử đăng nhập thủ công hoặc gửi lại. Nếu lượt trước đã ghi thành công, lượt gửi lại nhận `409`. |
+
+SQL Server dùng ràng buộc `UNIQUE` của `users.username` từ migration 001 để phân xử các lượt đăng ký đồng thời. Chạy `npm run test:sqlserver` với database thử nghiệm để kiểm tra một lượt `201`, một lượt `409`, hash Argon2id và quyền của thành viên mới. Dùng dữ liệu tổng hợp, ví dụ `demo.member166` và `Demo only 166!`.
+
+### Phiên và danh mục
+
 | API | Yêu cầu và phản hồi |
 | --- | --- |
 | `POST /auth/login` | Gửi JSON `{ username, password }` từ origin ứng dụng. Nhận `200` với `{ id, username, role, csrf_token }` và cookie phiên. |
