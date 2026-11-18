@@ -13,7 +13,7 @@ Cần Node.js 26 trở lên và một cơ sở dữ liệu Microsoft SQL Server.
 
 ### Đăng ký thành viên Story #166
 
-Gửi `POST /auth/register` cùng origin HTTPS với `Content-Type: application/json` và đúng hai khóa `username`, `password`. Giới hạn JSON là 8.192 byte. Gửi tên gốc để máy chủ kiểm tra tối đa 128 đơn vị UTF-16 rồi chuẩn hóa bằng `trim().toLowerCase()`. Tên chuẩn dài 3–64 ký tự, bắt đầu bằng chữ ASCII hoặc số, các ký tự tiếp theo có thể thêm `.`, `_` và `-`. Mật khẩu giữ nguyên, cần ít nhất 12 điểm mã Unicode, tối đa 1.024 byte UTF-8 và có ít nhất một ký tự khác khoảng trắng.
+Gửi `POST /auth/register` cùng origin HTTPS với `Content-Type: application/json` và đúng hai khóa `username`, `password`. Giới hạn JSON là 8.192 byte. Gửi tên gốc để máy chủ kiểm tra tối đa 128 đơn vị UTF-16 rồi chuẩn hóa bằng `trim().toLowerCase()`. Tên chuẩn dài 3–64 ký tự, bắt đầu bằng chữ ASCII hoặc số, các ký tự tiếp theo có thể thêm `.`, `_` và `-`. Mật khẩu giữ nguyên, cần ít nhất 8 điểm mã Unicode, tối đa 1.024 byte UTF-8 và có ít nhất một ký tự khác khoảng trắng. FE kiểm tra Unicode hợp lệ trước khi đếm bằng `[...password].length` và đo byte bằng `TextEncoder`. Hiển thị “Mật khẩu phải có ít nhất 8 ký tự” khi thiếu điểm mã. Ví dụ `abc123😀` nhận 400 `INVALID_INPUT` và `abc1234😀` nhận 201 với tên mới hợp lệ.
 
 `201` trả `{ "username": "demo.member166", "role": "MEMBER" }` và `Cache-Control: no-store`. Hiển thị xác nhận, xóa mật khẩu và dùng tên trả về để điền sẵn khi khách quay lại đăng nhập. Khách tự gửi `POST /auth/login` để nhận cookie phiên rồi mở `GET /equipment`.
 

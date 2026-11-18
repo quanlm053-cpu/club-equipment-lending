@@ -144,11 +144,15 @@ test('SQL Server migration, repeatable demo seed and session lifecycle through H
     const requestTwo = await serve(subtest, await createApp({
       store: sqlServerStore(otherPool, sql, schema), origin,
     }));
-    const password = '  Synthetic registration 😀  ';
+    const password = ' abc123😀';
     for (const extra of [{ role: 'MANAGER' }, { extra: true }]) {
       await expectError(await register(request, { username: 'blocked.member', password, ...extra }),
         400, 'INVALID_INPUT');
     }
+    await expectError(await register(request, { username: 'registered.normalized', password: password.trim() }),
+      400, 'INVALID_INPUT');
+    assert.equal((await query(`SELECT COUNT(*) AS total FROM ${users}
+      WHERE username = 'registered.normalized'`)).recordset[0].total, 0);
     for (const [username, alternative] of [
       ['registered.exact', 'registered.exact'], ['registered.normalized', '  REGISTERED.Normalized  '],
     ]) {

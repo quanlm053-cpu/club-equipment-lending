@@ -25,7 +25,7 @@ test('registration validates input, hashes passwords and applies its own IP limi
   const request = await serve(t, await createApp({
     store, origin, now: () => time, logger: { error: (...args) => logged.push(args) },
   }));
-  const input = { username: '  ABC  ', password: '😀'.repeat(12) };
+  const input = { username: '  ABC  ', password: 'abc1234😀' };
   const invalidUtf8 = Buffer.concat([
     Buffer.from('{"username":"demo.invalidutf8","password":"abcdefghijk'),
     Buffer.from([0xff]),
@@ -46,9 +46,10 @@ test('registration validates input, hashes passwords and applies its own IP limi
     { ...input, username: 123 }, { ...input, password: 123 },
     { ...input, username: '.bad' }, { ...input, username: 'a'.repeat(65) },
     { ...input, username: 'ab' }, { ...input, username: 'a'.padStart(127) + 'bc' },
-    { ...input, password: '😀'.repeat(11) }, { ...input, password: ' '.repeat(12) },
+    { ...input, password: 'abc1234' }, { ...input, password: 'abc123😀' },
+    { ...input, password: '' }, { ...input, password: ' '.repeat(8) },
     { ...input, password: 'abcdefghijk\uD800' }, { ...input, password: 'abcdefghijk\uDC00' },
-    { ...input, password: '😀'.repeat(257) },
+    { ...input, password: '😀'.repeat(256) + 'a' },
   ]) {
     await expectError(await register(request, invalid), 400, 'INVALID_INPUT');
     time += 60_000;
@@ -92,7 +93,7 @@ test('registration validates input, hashes passwords and applies its own IP limi
     method: 'POST', headers: { ...headers, Origin: origin, 'X-CSRF-Token': session.csrf_token },
   }), 403, 'FORBIDDEN');
   time += 60_000;
-  assert.equal((await register(request, { ...input, username: 'after-limit' })).status, 201);
+  assert.equal((await register(request, { username: 'after-limit', password: 'abc12345' })).status, 201);
 });
 
 test('availability validates input after authorization and maps store results', async (t) => {

@@ -66,7 +66,7 @@ async function registrationInput(req) {
       typeof input.username !== 'string' || input.username.length > 128 ||
       typeof input.password !== 'string' || !input.password.isWellFormed() ||
       Buffer.byteLength(input.password) > 1024 ||
-      !input.password.trim() || [...input.password].length < 12) return;
+      !input.password.trim() || [...input.password].length < 8) return;
   const username = input.username.trim().toLowerCase();
   if (!/^[a-z0-9][a-z0-9._-]{2,63}$/.test(username)) return;
   return { username, password: input.password };

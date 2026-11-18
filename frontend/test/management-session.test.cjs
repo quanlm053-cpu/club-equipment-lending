@@ -8,12 +8,14 @@ const source = readFileSync(require.resolve('../app.js'), 'utf8')
 const manager = { id: 1, role: 'MANAGER', csrf_token: 'demo-token' };
 const pending = { id: 42, status: 'PENDING' };
 
-function setup() {
+function setup({ session = { ...manager }, hash = '#equipment' } = {}) {
   const nodes = new Map();
   const requests = [];
   const windowListeners = {};
-  function element() {
+  const location = { hash };
+  function element(id) {
     return {
+      id,
       children: [],
       dataset: {},
       listeners: {},
@@ -33,7 +35,7 @@ function setup() {
   }
   const app = runInNewContext(source + `
     user = initialSession;
-    ({ checkSession, logout, submitDecision, managementBusy, managementDecisions, getUser: () => user,
+    ({ byId, checkSession, logout, submitDecision, managementBusy, managementDecisions, getUser: () => user,
       openManagement(hash, role = 'MANAGER') {
         user.role = role;
         location.hash = hash;
@@ -44,31 +46,36 @@ function setup() {
         renderManagement(managementView);
       } });
   `, {
-    initialSession: { ...manager },
+    initialSession: session,
     document: {
       createElement: element,
       getElementById(id) {
-        if (!nodes.has(id)) nodes.set(id, element());
+        if (!nodes.has(id)) nodes.set(id, element(id));
         return nodes.get(id);
       },
       querySelectorAll: () => [],
     },
     window: { addEventListener(type, listener) { windowListeners[type] = listener; } },
-    location: { hash: '#equipment' },
-    history: { replaceState() {} },
+    location,
+    history: { replaceState(_state, _title, newHash) { location.hash = newHash; } },
     AbortController,
     AbortSignal,
+    TextEncoder,
+    clearTimeout,
     fetch(path, options) {
       if (path === '/equipment') return Promise.resolve(Response.json([]));
       const { promise, resolve, reject } = Promise.withResolvers();
-      requests.push({ path, method: options.method ?? 'GET', headers: options.headers, resolve, reject });
+      requests.push({ path, method: options.method ?? 'GET', headers: options.headers, body: options.body, resolve, reject });
       return promise;
     },
   });
   return {
     ...app,
     nodes,
-    navigate: () => windowListeners.hashchange(),
+    navigate(newHash = location.hash) {
+      location.hash = newHash;
+      windowListeners.hashchange();
+    },
     take(path, method = 'GET') {
       const request = requests.shift();
       assert.equal(request?.path, path);
@@ -80,6 +87,58 @@ function setup() {
 }
 
 const flush = () => new Promise(setImmediate);
+
+test('registration validates Unicode and allows manual member login after success', async () => {
+  const app = setup({ session: null, hash: '#register' });
+  app.navigate();
+  app.byId('register-name').value = 'demo.member176';
+  const password = app.byId('register-password');
+  const submit = app.nodes.get('register-form').listeners.submit;
+  const event = { preventDefault() {} };
+
+  for (const [value, message] of [
+    ['', /Vui lòng nhập mật khẩu/],
+    [' '.repeat(8), /ký tự khác khoảng trắng/],
+    ['abc1234\uD800', /Unicode không hợp lệ/],
+    ['abc123😀', /^Mật khẩu phải có ít nhất 8 ký tự$/],
+    ['😀'.repeat(256) + 'a', /vượt quá 1\.024 byte/],
+  ]) {
+    password.value = value;
+    await submit(event);
+    assert.match(app.nodes.get('register-password-error').textContent, message);
+    assert.equal(app.requests.length, 0);
+  }
+
+  password.value = '😀'.repeat(256);
+  const boundarySubmission = submit(event);
+  const boundaryRequest = app.take('/auth/register', 'POST');
+  assert.equal(JSON.parse(boundaryRequest.body).password, password.value);
+  boundaryRequest.resolve(Response.json({ code: 'INVALID_INPUT' }, { status: 400 }));
+  await boundarySubmission;
+
+  password.value = ' abc12😀 ';
+  const submission = submit(event);
+  const request = app.take('/auth/register', 'POST');
+  assert.deepEqual(JSON.parse(request.body), { username: 'demo.member176', password: ' abc12😀 ' });
+  assert.equal(app.nodes.get('register-submit').disabled, true);
+  request.resolve(Response.json({ username: 'demo.member176' }, { status: 201 }));
+  await submission;
+  assert.equal(app.nodes.get('register-success').hidden, false);
+  assert.equal(app.getUser(), null);
+  assert.equal(app.requests.length, 0);
+
+  app.navigate('#login');
+  assert.equal(app.nodes.get('username').value, 'demo.member176');
+  assert.equal(app.nodes.get('password').value, '');
+  app.nodes.get('password').value = ' abc12😀 ';
+  const login = app.nodes.get('login-form').listeners.submit(event);
+  const loginRequest = app.take('/auth/login', 'POST');
+  assert.deepEqual(JSON.parse(loginRequest.body), JSON.parse(request.body));
+  loginRequest.resolve(Response.json({ id: 2, role: 'MEMBER', csrf_token: 'member-token' }));
+  await login;
+  await flush();
+  assert.equal(app.nodes.get('equipment').hidden, false);
+});
 
 const handedOver = {
   id: 42,
